@@ -1,0 +1,5 @@
+20d1a3cb15bd9df8754208d39eff51a7bc403545db5d905f5bb961ec66892bcd  /mnt/data/Limage_v1.6.5_x64.exe
+
+go test ./... : PASS
+Windows x64 GUI build : PASS
+Coordinate axes: camera-aware farthest rear corner + outward label offset

@@ -1,0 +1,25 @@
+* text=auto
+
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.rc text eol=crlf
+
+*.png binary
+*.ico binary
+*.exe binary
+*.sgy binary
+*.segy binary
+*.dat binary
+*.lidx binary
+*.cidx binary
+*.ptx binary
+*.out binary
+*.pprof binary

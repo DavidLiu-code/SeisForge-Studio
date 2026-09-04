@@ -1,0 +1,29 @@
+Limage v1.6.2 validation
+=======================
+
+Source base: v1.6.1
+Target: Windows x64 GUI
+
+Implemented:
+- FOV options extended to 120 degrees.
+- Saved FOV clamp extended to 0..120 degrees.
+- Perspective-correct 1/z interpolation for texture and Z-buffer depth.
+- Perspective-correct plane UV picking.
+- Global/root-owner 3-D keyboard routing after child/popup focus changes.
+- X/Y/Z independent axis shortcuts.
+- R overall scale shortcut.
+- F FOV shortcut.
+- Q/W gain and E/Shift+E palette shortcuts retained in 3-D.
+- Dedicated 3-D Help dialog.
+
+Validation commands:
+  go test ./...
+  GOOS=windows GOARCH=amd64 go build -ldflags='-H windowsgui' -o Limage_v1.6.2_x64.exe ./cmd/limage
+
+Results:
+  go test ./...: PASS
+  Windows x64 GUI build: PASS
+  file: PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+SHA-256:
+  b62274728bc652c7bd4dd37194af4cb1f197b3712edd61f9b9cea9c7b5682072  Limage_v1.6.2_x64.exe

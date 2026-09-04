@@ -1,0 +1,27 @@
+Limage v1.8.7 validation
+========================
+
+1. Native Go test suite
+   command: go test ./... -count=1
+   result: PASS
+
+2. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags='-H=windowsgui' -o Limage_v1.8.7_x64.exe ./cmd/limage
+   result: PASS
+
+3. Binary identification
+   /mnt/data/Limage_v1.8.7_x64.exe: PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+
+4. SHA-256
+   b214909fe52f5a68f5eadf66393218b090face1c3a3a3eaac4aaeb786ad91a9d  Limage_v1.8.7_x64.exe
+
+5. Home -> 3D route assertions
+   PASS: Home 3-D calls loadFile only after hiding Start Center.
+   PASS: Home 3-D no longer calls showVolumeWindowForPath/loadVolumePathIntoShell/showVolumeHomeShell directly.
+   PASS: completeWorkspaceOpen(workspaceMode3D) calls showVolumeWindow(), identical to the established 2-D “体” button.
+   PASS: volume3D/focus state is asserted before and after the bridge.
+   PASS: runtime breadcrumb logging enabled at %LOCALAPPDATA%\Limage\home3d_trace.log.
+
+6. Limitation
+   Windows GUI mouse interaction cannot be executed in this Linux build environment.
+   This release therefore validates the exact source route, native tests, and Windows build; final foreground behavior must be confirmed on Windows.

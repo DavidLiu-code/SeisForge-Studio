@@ -1,0 +1,20 @@
+Limage v1.6.0 validation
+========================
+
+Native tests:
+  go test ./... : PASS
+
+Windows build:
+  GOOS=windows GOARCH=amd64 go build -ldflags='-H windowsgui' ./cmd/limage : PASS
+
+Executable:
+  PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+SHA-256:
+  d4f7b12c663de0ac839ce5db0a451d451324084aa3cfdbf4a1b5528bcbaa17ac  Limage_v1.6.0_x64.exe
+
+3-D presets checked at build level:
+  - Visual: CIGVis / Interpretation / Standard
+  - Interaction: CIGVis / Classic
+  - CIGVis strict: no box, no slice borders, intersection-only persistent lines
+  - CIGVis controls: left rotate, Ctrl+left slice drag, Shift+left pan, right drag/wheel zoom, D drag mode, Space reset

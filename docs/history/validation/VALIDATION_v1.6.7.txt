@@ -1,0 +1,14 @@
+Limage v1.6.7 validation
+
+- gofmt: PASS
+- go test ./...: PASS
+- Windows amd64 GUI build: PASS
+- Executable format: /mnt/data/Limage_v1.6.7_x64.exe: PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+- SHA-256: 26b8cd27650ab8425cd8dd8e0b0a42a866a8f2698d1180fb95c47cca733058db
+
+Key v1.6.7 checks:
+- IL and XL rulers use independent rear/top edges.
+- T ruler uses the screen-leftmost vertical volume edge.
+- No shared coordinate origin.
+- Coordinate ruler offset reduced to keep rulers close to the volume.
+- min/current/max values use physical normalized axis mapping.

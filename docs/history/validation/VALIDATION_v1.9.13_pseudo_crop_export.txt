@@ -1,0 +1,92 @@
+Limage v1.9.13 Pseudo Crop Export validation
+Date: 2026-08-28
+
+Release artifact
+- Limage_v1.9.13_pseudo_crop_export_x64.exe
+- Size: 4,796,416 bytes
+- PE subsystem: Windows GUI (2)
+- SHA-256: 8B18CF3EB544E24CCEE5DB910C9D70FEAAB1821F595B5BDD15B362AFE5F4A10A
+- Embedded application version: 1.9.13 Pseudo Crop Export
+
+Implemented contracts
+- The pseudo-3-D page provides an enabled-only-when-valid "导出范围" action.
+  At least one XY AOI or time window must be active, and only checked lines
+  that are actually ready and visible in the completed curtain scene are
+  included.
+- Starting an export deep-copies canonical geometry and freezes line IDs,
+  geometry fingerprints, calibration diagnostics, source metadata, trace
+  indices, sample windows and requested ranges. Camera rotation, zoom,
+  occlusion and later UI changes cannot alter a running export.
+- Spatial planning reuses pseudo3d.ClipTrajectory. Every continuous re-entry
+  keeps its interpolation support traces; overlapping supports are de-duplicated
+  by walking the canonical trace geometry once in original acquisition order.
+- Time windows are snapped independently for each line. No resampling or
+  sample decode/re-encode occurs.
+- Each selected line is written as an independent SEG-Y in a unique
+  <project>_pseudo_crop_YYYYMMDD_HHMMSS directory. Duplicate source basenames
+  receive a deterministic short suffix and existing artifacts are not reused.
+- The public execution boundary rejects path traversal, absolute/invalid
+  Windows names, device names, manifest/DAT name collisions, duplicate output
+  names/sources and inconsistent trace/sample/source snapshots before creating
+  an output directory.
+- SEG-Y output uses a same-directory unique temporary file and performs
+  Flush -> Sync -> Close -> reopen/structure/header/delay validation -> commit.
+  The source path and aliases to the same file are rejected as destinations.
+- Textual, binary and extended textual headers are copied; original trace
+  headers, endian convention and IBM/IEEE/integer sample bytes are preserved.
+  Only crop-required ns/dt/fixed-length/delay fields are updated.
+- A modeless progress window reports line k/N, trace i/M and monotonic percent.
+  Per-trace updates are coalesced latest-wins to avoid flooding the UI queue.
+  Cancel deletes the current temporary output, preserves fully committed lines
+  and writes every completed/cancelled/not-started status to the manifest.
+- One line failure does not stop later lines. The original DAT is copied
+  byte-for-byte and recorded with SHA-256. Completed, partial and cancelled
+  batches write a JSON manifest with requested/actual/clipped ranges,
+  calibration, geometry fingerprint, trace/sample mapping and output checks.
+- The in-program pseudo-3-D help explains that "current view" means checked
+  curtain lines, XY AOI and time window, not the camera frustum.
+
+Automated verification
+- gofmt -d on cmd/internal Go sources: clean
+- go test ./... -count=3: PASS
+- 183 Go Test functions across the source tree: PASS
+- Export-related SEG-Y/core/UI tests, count=10: PASS
+- go vet ./internal/pseudoexport: PASS
+- Windows release build script (which reruns go test ./...): PASS
+- PE GUI subsystem check: PASS
+- Hidden packaged launch for 5 seconds: responsive, no early exit
+
+Format and safety verification
+- IBM float32, IEEE float32, int32 and int16 payloads: raw cropped bytes match
+  the source for big- and little-endian fixtures.
+- Source XY, coordinate scalar and CDP bytes: unchanged.
+- Existing destination replacement failure: old destination restored.
+- Cancellation/read failure: no incomplete SEG-Y destination or export temp.
+- Source path, normalized alias, Windows case alias and same-file target:
+  rejected without changing the source.
+- Unsafe ../, absolute, reserved device, duplicate and DAT-collision output
+  names: rejected before output-directory creation.
+
+Provided survey acceptance
+- Project: %SEISFORGE_TEST_CROOKED_PROJECT_DIR% (62 valid lines)
+- Validation line: H15FZ6398_286
+- Requested time: 10-50 ms; source samples: 5-25; output samples: 21
+- Source traces selected in acquisition order: 517, 518, 519, 520
+- Output: 4 traces x 21 samples, 4,896 bytes, reopened successfully
+- Output SHA-256:
+  0593C6B1C6FCA9B13430CB7F61C9C6058154860F84AE0CE22DA461E3FBE3EBE4
+- Source SEG-Y SHA-256 before/after (unchanged):
+  AA695932A7A7D6F5E6473FA7076BC26C2616605CD3C9D263633D89BED899A24C
+- Source/copied DAT SHA-256 (identical):
+  95F672A368E77E10A83B06FE92B79B073F87ABA5E37B1148008BF1EB7FB22566
+- Independent byte audit: samples 5-25 match exactly; all trace-header bytes
+  except permitted delay/ns/dt fields match; delay changes from 0 to 10 ms.
+- Validation output and manifest:
+  <external-validation-output>
+
+Compatibility and delivery
+- Source SEG-Y and DAT are always opened read-only.
+- Existing v1.9.12 executable and validation files are retained.
+- Existing SectionExportOptions callers remain source-compatible; Context is
+  optional and a nil value preserves the previous non-cancellable behavior.
+- Existing v1.9.12 crooked-geometry behavior and tests remain active in v1.9.13.

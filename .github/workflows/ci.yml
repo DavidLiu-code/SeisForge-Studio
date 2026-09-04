@@ -1,0 +1,38 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test and build Windows GUI
+        shell: pwsh
+        run: .\build_windows_release.ps1
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: SeisForgeStudio-windows-x64
+          path: SeisForgeStudio_v1.9.15_windows_x64.exe
+          if-no-files-found: error
+          retention-days: 14

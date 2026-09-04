@@ -1,0 +1,29 @@
+Limage v1.9.15 SEG-Y Header Table validation
+
+Artifact
+- Limage_v1.9.15_segy_header_table_x64.exe
+- Size: 5,016,576 bytes
+- SHA-256: 614510c3b281037082daf80db1bb6d30e56bf713f9510327891dd7e706b53a4e
+- PE Subsystem: Windows GUI (2)
+
+Verification
+- go test ./... -count=1: PASS
+- native four-column binary/trace-header table contract: PASS
+- grid lines, full-row selection, double buffering and no-sort header contract: PASS
+- all/key/non-zero filters and stable SEG-Y byte order: PASS
+- explanation de-duplication, units and negative values: PASS
+- fixed summary warnings and sample/interval consistency: PASS
+- filtered TSV plus complete raw Hex copy: PASS
+- selected field/top-row persistence across loading generations: PASS
+- format-code 4 header-only table and Hex behavior: PASS
+- zoomed single-trace waveform regression: PASS
+- automated PE Windows GUI subsystem assertion: PASS
+
+Manual visual QA
+- 100%-200% DPI and real-data interaction remain for user-side visual acceptance; no automated test claims pixel-level native-control alignment.
+
+Baseline backup
+- ..\phase15_backups\baseline_20260830_230311_1.9.14
+- Files: 291
+- Baseline manifest: SHA256SUMS.txt
+- Baseline manifest SHA-256: d529ae538069f46d374ecf67e517e398e0f0e04ff3bfe9267abfc80a2cb7e414

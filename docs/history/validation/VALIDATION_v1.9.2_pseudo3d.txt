@@ -1,0 +1,48 @@
+Limage v1.9.2 Phase 4 validation
+Date: 2026-08-24 (Asia/Shanghai)
+
+Baseline
+--------
+External copy: <external-baseline-backup>
+Files copied: 192
+Source/copied bytes: 52151339 / 52151339
+Manifest: SHA256SUMS_PHASE4_BASELINE.txt
+Manifest SHA-256: 7836ab27f14e1e9f5d535182bb020e202d6f84e71207fa56a4911d154d43e7e0
+
+Automated tests
+---------------
+Command: go test ./... -count=1
+Result: PASS for cmd/limage and all internal packages.
+
+Command: LIMAGE_PHASE4_FULL_ACCEPTANCE=1 go test ./cmd/limage -run TestProvidedSu36Pseudo3DAllCurtains -count=1 -v
+Result: PASS in 4.38 seconds.
+Survey: %SEISFORGE_TEST_CROOKED_PROJECT_DIR%
+Validated: 62 valid SEG-Y, 62 DAT navigation matches, project multiplier 0.1,
+           62 indexed curtain textures under 192 MiB, and a 62-curtain depth-rendered scene.
+
+Interactive Win32 validation
+----------------------------
+- Home Crooked card opened Limage64Crooked directly without a file/folder dialog.
+- Empty shell showed enabled Open File/Open Folder controls and a disabled Pseudo button.
+- Opening the supplied folder enabled Pseudo and opened Limage64Pseudo3D.
+- Pseudo ListView contained 62 rows and 62 checked rows by default.
+- Status after progressive loading: 62 displayed, 0 failed.
+- Clicking the first checkbox changed 62 -> 61; clicking again restored 62.
+- Three pseudo-window open/close cycles had stable post-first-cycle GDI count (144/144/144),
+  with no incremental GDI leak.
+
+Frozen regression
+-----------------
+cmd/limage/volume_windows.go was unchanged from the Phase 4 baseline.
+SHA-256: f17a613553ec16b82bfb27c3def2aee3cea0460aba2e41576220753ebfdc2cff
+Existing palette-order, gain/clip, crooked-view v1, volume-view v1 and routing tests passed.
+
+Release build
+-------------
+Command: build_windows_release.cmd
+Underlying linker flags: -s -w -H=windowsgui
+Executable: Limage_v1.9.2_pseudo3d_x64.exe
+Bytes: 4129280
+PE Subsystem: 2 (Windows GUI; no console window)
+SHA-256: 98101973249933c7e699d4dd5296dcd94fc5c8b9d218f84e2a9600ed6bb7796e
+Runtime launch: PASS; main window title was Limage v1.9.2 Phase 4 [x64].

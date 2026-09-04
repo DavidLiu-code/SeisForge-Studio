@@ -1,0 +1,14 @@
+Limage v1.6.8 validation
+
+- gofmt: PASS
+- go test ./...: PASS
+- Windows amd64 GUI build: PASS
+- Executable format:  PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+- SHA-256: e0dc3c072e7964f406d12cb038207675d21cab574f075b2163520f68495958f9
+
+Key v1.6.8 checks:
+- IL / XL / T current tick positions use exact 3-D projection under perspective FOV.
+- Endpoint text is separated tangentially away from shared corners.
+- Label spacing increases mildly as FOV increases.
+- Coordinate ruler screen offsets remain compact and edge-attached.
+- Volume composition is shifted downward and bottom reserve reduced.

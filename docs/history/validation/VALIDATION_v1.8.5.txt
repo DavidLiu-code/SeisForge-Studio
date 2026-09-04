@@ -1,0 +1,25 @@
+Limage v1.8.5 validation
+========================
+
+1. Native Go test suite
+   command: go test ./... -count=1
+   result: PASS
+
+2. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.8.5_x64.exe ./cmd/limage
+   result: PASS
+
+3. Binary identification
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+4. Direct 3-D entry path check
+   - Home 3-D branch calls showVolumeWindowForPath(path, true).
+   - Home 3-D branch returns before legacy loadFile().
+   - Direct 3-D path therefore does not call 2-D rerender/workspaceSyncAFromMain.
+   - Volume window starts with volume3D=true and volumeFocusPanel=-1.
+   - Closing direct 3-D restores the Start Center because no hidden 2-D A was loaded.
+
+5. SHA-256
+   4951b4aba75155a17d8335d29d2837ff704ce4048428744be0890de33de36db9  Limage_v1.8.5_x64.exe
+
+Note: this Linux build environment does not include Wine, so the Win32 GUI cannot be clicked interactively here. The executable and direct-entry call path are validated; final foreground/window behavior should still be confirmed on a Windows machine.

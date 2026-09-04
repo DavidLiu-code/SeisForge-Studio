@@ -1,0 +1,17 @@
+Limage v1.2.5 large-scale geometry benchmark
+============================================
+Synthetic sparse regular post-stack SEG-Y:
+  logical size: 1.2480036 GB
+  geometry: 200 Inline x 1000 Crossline = 200,000 traces
+  ns: 1500, dt: 2 ms, IEEE float32
+
+Same local test environment:
+  v1.2.4 exhaustive geometry build: 150.884953 ms
+  v1.2.5 validated fast-grid build:   11.639326 ms
+  v1.2.5 geometry headers touched:    127
+  observed geometry speedup:          ~12.96x
+
+Important: v1.2.5 also removes the eager full-volume Time-Slice slab load when
+the active mode is Inline or Crossline. That I/O removal is not included in
+the 12.96x geometry-only number and can dominate the real first-open gain on
+multi-million-trace field volumes.

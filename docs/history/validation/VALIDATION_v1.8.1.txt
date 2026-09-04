@@ -1,0 +1,42 @@
+Limage v1.8.1 validation
+========================
+
+1. Native Go test suite
+   command: go test ./... -count=1
+   result: PASS
+
+2. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.8.1_x64.exe ./cmd/limage
+   result: PASS
+
+3. Binary identification
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+
+4. Start Center implementation checks
+   - old grey workspace buttons removed from the home surface
+   - 2D / 3D / Crooked cards are parent-GDI painted with hover state
+   - home-only view hides the internal Direction/IL/XL/T toolbar controls
+   - large SEG-Y drop/select zone added
+   - recent SEG-Y state persists in %LOCALAPPDATA%\\Limage\\start_center.json
+   - last workspace marker is persisted
+   - direct home open/drop performs lightweight IL/XL header recommendation
+
+5. 3-D UI checks
+   - visible Interaction combobox removed
+   - interaction is forced to the single default CIGVis-style mode
+   - Style combo order: Clean, CIGVis, Interpretation, Standard
+   - style combo index is mapped back to the original internal style ids
+
+6. Regression checks
+   - v1.7.2 NumPad physical-key normalization remains in volume_export_windows.go
+   - NumPad 1 with NumLock off remains distinguished from the dedicated End key
+
+7. SHA-256
+   e73800c3628b7b4020f251786b1f93158031c807dbf5d32ac797f5168ffd622b  Limage_v1.8.1_x64.exe
+
+Note
+----
+The build host is Linux, so Windows Explorer drag-enter visual behavior cannot be
+interactively exercised here. Native WM_DROPFILES acceptance and Windows x64
+compilation are retained; final Windows mouse/drag feel should be confirmed on a
+Windows desktop.

@@ -1,0 +1,41 @@
+Limage v1.8.6 validation
+========================
+
+1. Native Go tests
+   command: go test ./... -count=1
+   result: PASS
+
+2. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.8.6_x64.exe ./cmd/limage
+   result: PASS
+
+3. Binary identification
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+4. Home -> 3D route assertions
+   PASS: 3D card calls dedicated chooser
+   PASS: dedicated chooser creates Volume shell before file dialog
+   PASS: dedicated 3D chooser contains no loadFile() call
+   PASS: Volume shell hides Start Center / 2D compare window
+   PASS: 3D topology is reasserted after loading saved view defaults
+   PASS: A-side async completion has one-shot force-3D guard
+
+5. Volume geometry smoke test
+   source: test_poststack_A.sgy
+   detected IL byte: 189
+   detected XL byte: 193
+   grid: 40 inline x 50 crossline
+   valid traces: 2000
+   duplicates: 0
+   poststack: true
+   result: PASS
+
+6. Regression scope retained
+   - NumPad 1 / End fix retained
+   - Start Center drag/drop and Recent retained
+   - Volume styles retained
+   - Volume -> 2D Full View style synchronization retained
+   - A/B/difference 3D compare retained
+
+SHA-256
+39cd281bdb119ea9f0d83e215d702289d9d7c173bdde36e10694b5be14bd2072  Limage_v1.8.6_x64.exe

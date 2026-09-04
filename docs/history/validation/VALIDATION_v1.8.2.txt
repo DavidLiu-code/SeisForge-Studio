@@ -1,0 +1,62 @@
+Limage v1.8.2 validation
+========================
+
+1. Native Go test suite
+   command: go test ./... -count=1
+   result: PASS
+   - cmd/licensegen: no test files
+   - cmd/limage: no test files
+   - internal/license: PASS
+   - internal/segy: PASS
+
+2. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.8.2_x64.exe ./cmd/limage
+   result: PASS
+
+3. Binary identification
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+
+4. Start Center final-polish checks
+   - 2D / 3D / Crooked cards have hover, pressed, light shadow and hand-cursor states
+   - card descriptions now include a clearer usage line
+   - last-workspace marker is visually lighter and remains informational only
+   - Drop Zone uses a dashed outline plus a minimal document/drop icon
+   - vertical spacing between cards, Drop Zone and Recent is tighter
+   - version metadata is visually de-emphasized
+
+5. Explorer drag-enter feedback
+   - OLE IDropTarget implemented for compare/home and 3-D windows
+   - DragEnter / DragOver / DragLeave / Drop callbacks compile for Windows x64
+   - Start Center Drop Zone highlights before mouse release while Explorer is dragging a file
+   - CF_HDROP is extracted from IDataObject on Drop
+   - when OLE registration succeeds, legacy DragAcceptFiles is disabled to avoid duplicate Drop handling
+   - native WM_DROPFILES remains as fallback if OLE registration is unavailable
+
+6. Recent files checks
+   - persistent state remains %LOCALAPPDATA%\Limage\start_center.json
+   - maximum recent entries reduced from 8 to 5
+   - row displays file name, parent path, workspace type and date
+   - row supports direct Open
+   - per-row Remove and header Clear History only change recent metadata; source SEG-Y files are untouched
+   - empty recent state has an explicit lightweight placeholder
+
+7. 3-D UI regression checks
+   - visible Interaction combobox remains removed
+   - interaction remains forced to the default CIGVis-style mode
+   - Style combo order remains: Clean, CIGVis, Interpretation, Standard
+   - internal style mapping remains volumeStyleComboOrder = []int{3,0,1,2}
+
+8. NumPad regression checks
+   - v1.7.2 physical NumPad normalization remains in volume_export_windows.go
+   - NumPad 1 with NumLock off is still handled through the non-extended VK_END path
+   - dedicated keyboard End remains distinct
+
+9. SHA-256
+   7bf0d9c3228677c94093b1eabf54312f02ef93abb218b0bfbf12f63b4b1da74b  Limage_v1.8.2_x64.exe
+
+Note
+----
+The build host is Linux, so Windows Explorer/OLE drag-enter mouse feel cannot be
+interactively exercised on the build host. The Windows COM callbacks, CF_HDROP
+path, x64 GUI compilation, and legacy fallback path all compile successfully.
+Final visual/mouse feel should still be confirmed on a Windows desktop.

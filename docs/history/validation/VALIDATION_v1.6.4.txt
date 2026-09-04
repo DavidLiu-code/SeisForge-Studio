@@ -1,0 +1,24 @@
+Limage v1.6.4 validation
+=======================
+
+1. Go test
+   Command: go test ./...
+   Result : PASS
+
+2. Windows x64 GUI build
+   Command: GOOS=windows GOARCH=amd64 go build -ldflags='-H windowsgui' -o Limage_v1.6.4_x64.exe ./cmd/limage
+   Result : PASS
+
+3. Binary type
+   PE32+ executable for MS Windows (GUI), x86-64
+
+4. Key implementation checks
+   - Independent axis factor options expanded to 0.10x–8.00x.
+   - Factory camera: Az=-145 deg, El=24 deg, FOV=35 deg when no saved default exists.
+   - Coordinate checkbox now controls a full IL/XL/T numeric ruler triad.
+   - Legacy right-only Time ruler removed.
+   - Q/W shared gain handler now refreshes the 3-D volume textures.
+   - Time Slice refresh continues to use the same percentile-style gain range.
+
+SHA-256
+f37e4ca108a47bba5dd2f92675378e72e5ae251b1aea3bdff8ec237d5cc48cfb  Limage_v1.6.4_x64.exe

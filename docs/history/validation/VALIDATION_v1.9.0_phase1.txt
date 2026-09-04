@@ -1,0 +1,35 @@
+Limage v1.9.0 Phase 1 validation
+Date: 2026-08-24
+
+Baseline backup outside source:
+  <external-baseline-backup>
+  SHA-256: 23e3854e6fbfc44a1e1d4eeecd5f5dc1ba1c32251fd987c9e522a6a92a1c235f
+  Manifest hash verification: PASS
+
+Tests:
+  go test ./... -count=1: PASS
+  Includes dataset, geometry, workspace, router, parameter/JSON and render pixel/RenderStats regressions.
+
+Build:
+  GOOS=windows GOARCH=amd64 CGO_ENABLED=0
+  go build -trimpath -ldflags='-H=windowsgui' -o Limage_v1.9.0_phase1_x64.exe ./cmd/limage
+  Result: PASS
+
+Executable inspection:
+  Machine: 0x8664 (AMD64)
+  Optional header: 0x020B (PE32+)
+  Subsystem: 2 (Windows GUI)
+  Size: 6,245,888 bytes
+  SHA-256: b8843430c4dcfe7cd75019fd0055433fa1fcf90817ba5d35aef16a0fa2affa1e
+
+Preserved executables:
+  Limage_v1.8.7_x64.exe
+  SHA-256: b214909fe52f5a68f5eadf66393218b090face1c3a3a3eaac4aaeb786ad91a9d
+
+  Limage_v1.8.7_3Dfix_x64.exe
+  SHA-256: 74a6850c42883dbf125c01c4729cd2e3065dbfc66ab858d64d6986eb17b2f3e8
+
+User display settings were not rewritten during implementation or tests:
+  %LOCALAPPDATA%\Limage\volume_view.json
+  Last modified: 2026-08-23 18:47:51
+  SHA-256: 60c4f51ce6ac9c60c8868c7f341cbe34feb81d618711d0140f9490c41d5da65e

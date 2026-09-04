@@ -1,0 +1,4 @@
+8431cfa6ed3b5c8f3682978369f6ffa3e4384d4c47c0090ab3cf38840dc56759  /mnt/data/Limage_v1.6.6_x64.exe
+
+Tests: go test ./... PASS
+Build: GOOS=windows GOARCH=amd64 -H=windowsgui PASS

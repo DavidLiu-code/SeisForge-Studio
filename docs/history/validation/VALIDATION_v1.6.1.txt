@@ -1,0 +1,25 @@
+Limage v1.6.1 validation
+========================
+
+1. Native tests
+   Command: go test ./...
+   Result: PASS
+   - cmd/licensegen: no test files
+   - cmd/limage: no test files
+   - internal/license: PASS
+   - internal/segy: PASS
+
+2. Windows x64 GUI build
+   Command: GOOS=windows GOARCH=amd64 go build -ldflags='-H windowsgui' -o Limage_v1.6.1_x64.exe ./cmd/limage
+   Result: PASS
+
+3. Binary inspection
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+
+4. SHA-256
+   38fe11b354592b6c3c3267d92b11023daa4f0be122ab01d1356150d388a05279  Limage_v1.6.1_x64.exe
+
+5. Implemented view-default persistence
+   %LOCALAPPDATA%\Limage\volume_view.json
+
+Note: the Windows GUI cannot be interactively exercised in this Linux build environment; final mouse feel and visual tuning should be confirmed on Windows.
