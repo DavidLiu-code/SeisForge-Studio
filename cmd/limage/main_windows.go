@@ -651,6 +651,23 @@ func pointInImage(px, py int) bool {
 	return px >= x && px < x+w && py >= y && py < y+h
 }
 
+// invalidateMainImage limits transient zoom/palette repainting to the seismic
+// canvas. Invalidating the whole legacy window also asks native toolbar
+// buttons to participate in the update cycle, which is visible as a flash
+// when the user clicks or drags on the image.
+func invalidateMainImage(erase bool) {
+	if hwnd == 0 {
+		return
+	}
+	x, y, w, h := imageArea()
+	r := RECT{Left: int32(x), Top: int32(y), Right: int32(x + w), Bottom: int32(y + h)}
+	bg := uintptr(0)
+	if erase {
+		bg = 1
+	}
+	pInvalidateRect.Call(hwnd, uintptr(unsafe.Pointer(&r)), bg)
+}
+
 func mousePoint(lParam uintptr) (int, int) {
 	x := int(int16(uint16(lParam & 0xffff)))
 	y := int(int16(uint16((lParam >> 16) & 0xffff)))
@@ -726,7 +743,7 @@ func setZoomMode(on bool) {
 	if !on && zoomDragging {
 		zoomDragging = false
 		pReleaseCapture.Call()
-		pInvalidateRect.Call(hwnd, 0, 0)
+		invalidateMainImage(false)
 	}
 	if crossCursor != 0 && on {
 		pSetCursor.Call(crossCursor)
@@ -880,7 +897,7 @@ func applyPalette() {
 		bgra[j+2] = c.r
 		bgra[j+3] = 0
 	}
-	pInvalidateRect.Call(hwnd, 0, 0)
+	invalidateMainImage(false)
 	if markHwnd != 0 {
 		pInvalidateRect.Call(markHwnd, 0, 1)
 	}
@@ -1631,7 +1648,7 @@ func wndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				zoomCurrentY = zoomStartY
 				zoomDragging = true
 				pSetCapture.Call(hwnd)
-				pInvalidateRect.Call(hwnd, 0, 0)
+				invalidateMainImage(false)
 				return 0
 			}
 		}
@@ -1641,7 +1658,7 @@ func wndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			x, y, w, hh := imageArea()
 			zoomCurrentX = clampInt(mx, x, x+w-1)
 			zoomCurrentY = clampInt(my, y, y+hh-1)
-			pInvalidateRect.Call(hwnd, 0, 0)
+			invalidateMainImage(false)
 		}
 		updateMouseStatus(mx, my)
 		return 0
@@ -1654,7 +1671,7 @@ func wndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			zoomDragging = false
 			pReleaseCapture.Call()
 			x0, y0, x1, y1 := zoomStartX, zoomStartY, zoomCurrentX, zoomCurrentY
-			pInvalidateRect.Call(hwnd, 0, 0)
+			invalidateMainImage(false)
 			applyZoomRect(x0, y0, x1, y1)
 			return 0
 		}

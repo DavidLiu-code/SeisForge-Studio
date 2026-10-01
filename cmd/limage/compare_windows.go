@@ -253,7 +253,7 @@ func showCompareWindow() {
 	compareOriginTraceStart, compareOriginTraceEnd, compareOriginTraceStep = compareTraceStart, compareTraceEnd, compareTraceStep
 	compareOriginSampleStart, compareOriginSampleEnd = compareSampleStart, compareSampleEnd
 	h, _, _ := pCreateWindowExW.Call(WS_EX_APPWINDOW, uintptr(unsafe.Pointer(u16("Limage64Compare"))), uintptr(unsafe.Pointer(u16(APP_NAME+" v"+APP_VERSION+" [x64] - 地震浏览与对比工作台"))),
-		WS_OVERLAPPEDWINDOW, uintptr(CW_USEDEFAULT), uintptr(CW_USEDEFAULT), 1560, 820, 0, 0, 0, 0)
+		WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN, uintptr(CW_USEDEFAULT), uintptr(CW_USEDEFAULT), 1560, 820, 0, 0, 0, 0)
 	if h == 0 {
 		return
 	}
@@ -617,6 +617,26 @@ func comparePaletteBGRA(idx []byte) []byte {
 	return out
 }
 
+// compareMappingGain combines the user's gain with the existing 99% clip
+// setting for the visible 2-D renderer.  The SEG-Y core historically used
+// GainPercent for percentile trimming and ignored ClipPercent, so one finite
+// spike could stretch the whole 2-D palette.  The volume renderer already
+// treats ClipPercent as symmetric tail rejection; use the same effective
+// percentile here without changing the frozen core/3-D rendering path.
+func compareMappingGain() float64 {
+	g := gainPercent
+	if clipPercent > 0 && clipPercent < 100 {
+		g += (100 - clipPercent) / 2
+	}
+	if g < 0 {
+		g = 0
+	}
+	if g > 49 {
+		g = 49
+	}
+	return g
+}
+
 func renderCompareSection() {
 	if compareAPath == "" || compareBPath == "" {
 		return
@@ -676,7 +696,7 @@ func renderCompareSection() {
 		if sm0 > sm1 {
 			sm0 = 0
 		}
-		pix, st, e := f.RenderWithOptions(segy.RenderOptions{Width: w, Height: h, AGC: agc, ClipPercent: clipPercent, GainPercent: gainPercent,
+		pix, st, e := f.RenderWithOptions(segy.RenderOptions{Width: w, Height: h, AGC: agc, ClipPercent: clipPercent, GainPercent: compareMappingGain(),
 			UseValueLimits: useLimits, MinValue: limitMin, MaxValue: limitMax, TraceStart: tr0, TraceEnd: tr1, TraceStep: traceStep, SampleStart: sm0, SampleEnd: sm1, DisplayMode: renderDisplayMode})
 		if e != nil {
 			return comparePanel{}, e
@@ -1005,7 +1025,7 @@ func renderCompareLine() {
 	}
 	tA, cA = filterLineRange(tA, cA, compareLineXMin, compareLineXMax)
 	opts := func(w, h int) segy.RenderOptions {
-		return segy.RenderOptions{Width: w, Height: h, AGC: agc, ClipPercent: clipPercent, GainPercent: gainPercent, UseValueLimits: useLimits, MinValue: limitMin, MaxValue: limitMax, SampleStart: compareSampleStart, SampleEnd: compareSampleEnd, DisplayMode: renderDisplayMode}
+		return segy.RenderOptions{Width: w, Height: h, AGC: agc, ClipPercent: clipPercent, GainPercent: compareMappingGain(), UseValueLimits: useLimits, MinValue: limitMin, MaxValue: limitMax, SampleStart: compareSampleStart, SampleEnd: compareSampleEnd, DisplayMode: renderDisplayMode}
 	}
 	paPix, paSt, e := d.fa.RenderTraceIndices(tA, opts(aw, ah))
 	if e != nil {
@@ -2441,6 +2461,26 @@ func paintCompareCommittedAnnotations(hdc uintptr) {
 }
 
 func paintCompareTransientOverlays(hdc uintptr) {
+	// Dynamic overlays must never enter the toolbar/status area. In addition to
+	// narrow invalidation rectangles this clip protects against an old cursor
+	// or drag rectangle repainting native buttons during a parent WM_PAINT.
+	savedDC, _, _ := pSaveDC.Call(hdc)
+	if savedDC != 0 {
+		client := clientRect(compareHwnd)
+		// Keep the whole third toolbar row (the 十字联动/矩形/椭圆/线段
+		// controls at y=67..90) outside the transient paint region.  The
+		// previous boundary (60) intersected those child buttons whenever a
+		// crosshair or annotation changed, making the native buttons visibly
+		// flash while the parent was repainted.
+		top := int32(94)
+		if client.Bottom < top {
+			top = client.Bottom
+		}
+		pIntersectClipRect.Call(hdc, 0, uintptr(top), uintptr(client.Right), uintptr(client.Bottom))
+	}
+	if savedDC != 0 {
+		defer pRestoreDC.Call(hdc, savedDC)
+	}
 	colors := []uintptr{rgbRef(255, 0, 0), rgbRef(0, 180, 0), rgbRef(0, 180, 220)}
 	if compareZoomDragging {
 		x0, x1 := compareZoomX0, compareZoomX1
@@ -2622,14 +2662,33 @@ func ensureCompareBaseCache(hdc uintptr) bool {
 func invalidateCompareBase() {
 	compareBaseDirty = true
 	if compareHwnd != 0 {
-		pInvalidateRect.Call(compareHwnd, 0, 0)
+		invalidateCompareScene(false)
 	}
 }
 
 func invalidateCompareOverlayAll() {
 	if compareHwnd != 0 {
-		pInvalidateRect.Call(compareHwnd, 0, 0)
+		invalidateCompareScene(false)
 	}
+}
+
+func invalidateCompareScene(erase bool) {
+	if compareHwnd == 0 {
+		return
+	}
+	r := clientRect(compareHwnd)
+	// Toolbar controls occupy three rows (the third row contains the linked
+	// crosshair and shape tools at y=67..90); the status/progress controls are
+	// children as well. Repaint only the axis/canvas area below those controls.
+	if r.Bottom <= 94 {
+		return
+	}
+	r.Top = 94
+	bg := uintptr(0)
+	if erase {
+		bg = 1
+	}
+	pInvalidateRect.Call(compareHwnd, uintptr(unsafe.Pointer(&r)), bg)
 }
 
 func invalidateCompareCrosshairAt(x, y float64) {
@@ -2991,6 +3050,10 @@ func compareWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 					startAutoDetectGeometry()
 				}
 				break
+			}
+			if compareTD.ga == nil {
+				setText(cc.status, "几何索引尚未准备完成，暂时无法还原。")
+				return 0
 			}
 			ilA, xlA, ilB, xlB, okb := compareGeometryBytesForFiles()
 			if !okb {

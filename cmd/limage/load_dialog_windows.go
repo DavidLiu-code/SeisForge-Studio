@@ -233,10 +233,21 @@ func createLoadUI(h uintptr) {
 
 func showLoadDialog(initialPath string) {
 	if loadHwnd != 0 {
-		pSetForeground.Call(loadHwnd)
+		// The load window can remain owned by the (disabled) compare window
+		// after a previous open/cancel cycle.  Merely calling
+		// SetForegroundWindow is not sufficient in that case: Windows may keep
+		// the popup inactive until the next keyboard message, which made the
+		// user see the dialog only after pressing a key.  Restore, repaint and
+		// focus it explicitly every time the Open button is clicked.
+		showTopLevelWindowRestored(loadHwnd)
+		if lc.input != 0 {
+			pSetFocus.Call(lc.input)
+		}
 		if initialPath != "" {
 			probeLoadPath(initialPath, true)
 		}
+		pInvalidateRect.Call(loadHwnd, 0, 1)
+		pUpdateWindow.Call(loadHwnd)
 		return
 	}
 	loadOwner = hwnd
@@ -257,8 +268,11 @@ func showLoadDialog(initialPath string) {
 	probedPath = ""
 	createLoadUI(h)
 	acceptSegyDrops(h)
-	pShowWindow.Call(h, SW_SHOW)
-	pUpdateWindow.Call(h)
+	// Populate the fields before the dialog becomes visible.  Showing the
+	// window first caused every setText/setRadio call in probeLoadPath to
+	// invalidate a separate child control, producing a perceptible cascade of
+	// repaints on the "数据加载" dialog.
+	pSendMessageW.Call(h, 0x000B /* WM_SETREDRAW */, 0, 0)
 	if initialPath != "" {
 		// If the requested path is already displayed, restore its exact cached
 		// range instead of resetting the dialog to the full file.
@@ -272,6 +286,17 @@ func showLoadDialog(initialPath string) {
 		// Re-click Open: show the current cached file/range as the starting point.
 		restoreCurrentLoadSelection()
 	}
+	pSendMessageW.Call(h, 0x000B /* WM_SETREDRAW */, 1, 0)
+	// Explicitly activate the new popup after all controls have been
+	// populated.  ShowWindow alone can leave an owned popup inactive while
+	// the owner is disabled; the first keyboard message would then be the
+	// first thing that causes it to paint/activate.
+	showTopLevelWindowRestored(h)
+	if lc.input != 0 {
+		pSetFocus.Call(lc.input)
+	}
+	pInvalidateRect.Call(h, 0, 1)
+	pUpdateWindow.Call(h)
 }
 
 func parseIntField(h uintptr, name string) (int64, bool) {
@@ -431,7 +456,13 @@ func loadSelectedFile(path string) bool {
 	// first; this preserves the previous cached seismic section on cancel/error.
 	oldSF := sf
 	sf = f
-	if !rerender() {
+	// The visible application surface is the compare workspace. Rendering the
+	// same full raster synchronously into the hidden legacy controller made the
+	// Open button appear to stall on large SEG-Y files, then the compare worker
+	// rendered it a second time. Keep the old synchronous path when the legacy
+	// window is the only consumer; otherwise let the compare workspace perform
+	// its own asynchronous geometry/render preparation.
+	if compareHwnd == 0 && !rerender() {
 		sf = oldSF
 		f.Close()
 		return false
