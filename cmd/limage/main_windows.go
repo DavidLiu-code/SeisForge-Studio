@@ -260,7 +260,7 @@ const (
 	ID_VOLUME  = 1014
 
 	APP_NAME        = "SeisForge Studio"
-	APP_VERSION     = "1.9.15"
+	APP_VERSION     = "1.10.2"
 	APP_PROJECT_URL = "https://github.com/DavidLiu-code/SeisForge-Studio"
 
 	IDP_OK       = 2001
@@ -2005,6 +2005,21 @@ func main() {
 					if handlePseudoShortcut(m.WParam) {
 						continue
 					}
+				}
+			}
+			if prestackHwnd != 0 {
+				// Route the Prestack shortcuts from the message loop as well.  The
+				// gather key, mapping fields and layer buttons are child controls;
+				// handling them here keeps Q/W/E/R active regardless of focus.
+				child, _, _ := pIsChild.Call(prestackHwnd, m.Hwnd)
+				rootOwner, _, _ := pGetAncestor.Call(m.Hwnd, GA_ROOTOWNER)
+				fg, _, _ := pGetForegroundWindow.Call()
+				prestackKeys := m.Hwnd == prestackHwnd || child != 0 || rootOwner == prestackHwnd || fg == prestackHwnd
+				// ComboLBox is an owned top-level popup, so the owner/foreground
+				// checks above classify it as Prestack.  Leave its keys alone while
+				// any native combo reports an open drop list.
+				if prestackKeys && !prestackComboDropdownOpen() && handlePrestackShortcut(m.WParam) {
+					continue
 				}
 			}
 			if volumeHwnd != 0 {

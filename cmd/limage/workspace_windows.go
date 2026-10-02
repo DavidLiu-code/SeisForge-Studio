@@ -21,9 +21,17 @@ const WM_DROPFILES = 0x0233
 // These values are a persisted JSON contract. Keep them explicit and in a
 // separate declaration from unrelated constants so iota cannot shift them.
 const (
-	workspaceMode2D      = 1
-	workspaceMode3D      = 2
-	workspaceModeCrooked = 3
+	workspaceMode2D       = 1
+	workspaceMode3D       = 2
+	workspaceModeCrooked  = 3
+	workspaceModePrestack = 4
+)
+
+// Card hit IDs deliberately differ from persisted workspace mode values.
+const (
+	startHomeCardCount = 4
+	startHomeDropHit   = 4
+	startHomeClearHit  = 5
 )
 
 type recentSegyFile struct {
@@ -40,7 +48,7 @@ type homeStateFile struct {
 }
 
 type homeLayout struct {
-	cards        [3]RECT
+	cards        [startHomeCardCount]RECT
 	drop         RECT
 	recentHeader RECT
 	clearRecent  RECT
@@ -57,14 +65,14 @@ var (
 
 	startHomeState       homeStateFile
 	startHomeStateLoaded bool
-	startHomeHover       = -1 // 0..2 cards, 3 drop zone, 4 clear, 10+n row, 30+n remove
+	startHomeHover       = -1 // 0..3 cards, 4 drop zone, 5 clear, 10+n row, 30+n remove
 	startHomePressed     = -1
 	startHomeDragActive  bool
 	startHomeFonts       [5]uintptr
 )
 
 func setPendingWorkspaceMode(mode int) {
-	if mode < workspaceMode2D || mode > workspaceModeCrooked {
+	if mode < workspaceMode2D || mode > workspaceModePrestack {
 		mode = workspaceMode2D
 	}
 	pendingWorkspaceMode = mode
@@ -174,7 +182,7 @@ func loadHomeState() {
 		}
 	}
 	startHomeState.Recent = clean
-	if startHomeState.LastWorkspace < workspaceMode2D || startHomeState.LastWorkspace > workspaceModeCrooked {
+	if startHomeState.LastWorkspace < workspaceMode2D || startHomeState.LastWorkspace > workspaceModePrestack {
 		startHomeState.LastWorkspace = workspaceMode2D
 	}
 }
@@ -227,7 +235,7 @@ func rememberRecentSegy(path string, mode int) {
 		return
 	}
 	loadHomeState()
-	if mode < workspaceMode2D || mode > workspaceModeCrooked {
+	if mode < workspaceMode2D || mode > workspaceModePrestack {
 		mode = workspaceMode2D
 	}
 	canon := filepath.Clean(path)
@@ -252,6 +260,8 @@ func workspaceModeName(mode int) string {
 		return "三维"
 	case workspaceModeCrooked:
 		return "弯线"
+	case workspaceModePrestack:
+		return "叠前"
 	default:
 		return "二维"
 	}
@@ -471,6 +481,12 @@ func handleWorkspaceDropPaths(paths []string, targetMode int) {
 	if len(paths) == 0 {
 		return
 	}
+	// The independent Prestack workspace always owns one dataset. It must not
+	// inherit the ordinary 2-D drop-to-B shortcut or a post-stack auto route.
+	if targetMode == workspaceModePrestack {
+		openApplicationPath(paths[0], workspaceModePrestack)
+		return
+	}
 
 	// Dropping onto the 3-D window loads A when the Home-created shell is still
 	// empty; once A is ready, the same gesture keeps the established "drop B"
@@ -598,27 +614,34 @@ func releaseStartHomeFonts() {
 
 func computeStartHomeLayout() homeLayout {
 	cw, ch := clientSize(compareHwnd)
-	contentW := minInt(1060, maxInt(780, cw-92))
-	if contentW > cw-48 {
-		contentW = maxInt(660, cw-48)
-	}
+	return computeStartHomeLayoutForSize(cw, ch, len(startHomeState.Recent))
+}
+
+func computeStartHomeLayoutForSize(cw, ch, recentCount int) homeLayout {
+	contentW := minInt(1240, maxInt(1, cw-48))
 	left := maxInt(24, (cw-contentW)/2)
 	gap := 20
-	cardW := (contentW - 2*gap) / 3
+	columns := 4
+	if contentW < 1080 {
+		columns = 2
+	}
+	cardW := maxInt(1, (contentW-(columns-1)*gap)/columns)
 	cardH := 194
 	cardY := 138
 	var l homeLayout
-	for i := 0; i < 3; i++ {
-		x := left + i*(cardW+gap)
-		l.cards[i] = RECT{Left: int32(x), Top: int32(cardY), Right: int32(x + cardW), Bottom: int32(cardY + cardH)}
+	for i := 0; i < startHomeCardCount; i++ {
+		x := left + (i%columns)*(cardW+gap)
+		y := cardY + (i/columns)*(cardH+gap)
+		l.cards[i] = RECT{Left: int32(x), Top: int32(y), Right: int32(x + cardW), Bottom: int32(y + cardH)}
 	}
-	dropY := cardY + cardH + 18
+	rows := (startHomeCardCount + columns - 1) / columns
+	dropY := cardY + rows*cardH + (rows-1)*gap + 18
 	l.drop = RECT{Left: int32(left), Top: int32(dropY), Right: int32(left + contentW), Bottom: int32(dropY + 116)}
 	headerY := dropY + 128
 	l.recentHeader = RECT{Left: int32(left), Top: int32(headerY), Right: int32(left + contentW), Bottom: int32(headerY + 28)}
 	l.clearRecent = RECT{Left: int32(left + contentW - 78), Top: int32(headerY + 2), Right: int32(left + contentW), Bottom: int32(headerY + 26)}
 	rowH := 49
-	maxRows := minInt(5, len(startHomeState.Recent))
+	maxRows := minInt(5, recentCount)
 	if ch > 0 {
 		fit := (ch - (headerY + 31) - 14) / rowH
 		if fit < maxRows {
@@ -719,6 +742,12 @@ func drawHomeIcon(hdc uintptr, kind, cx, cy int, color uintptr) {
 		}
 		pSelectObject.Call(hdc, old)
 		pDeleteObject.Call(brush)
+	case 3: // acquisition gathers: shot point and several receiver paths
+		for x := -24; x <= 24; x += 12 {
+			drawHomeLine(hdc, cx, cy-18, cx+x, cy+15, color, 1)
+			drawHomeLine(hdc, cx+x-3, cy+15, cx+x+3, cy+15, color, 2)
+		}
+		drawHomeLine(hdc, cx-4, cy-18, cx+4, cy-18, color, 3)
 	}
 }
 
@@ -753,9 +782,9 @@ func drawStartCenter(hdc uintptr) {
 	subR := RECT{Left: 0, Top: 98, Right: int32(cw), Bottom: 124}
 	drawHomeText(hdc, startHomeFonts[2], rgbRef(75, 85, 99), "选择工作区，或直接打开一个 SEG-Y 文件", subR, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 
-	titles := []string{"二维剖面", "三维数据体", "弯曲测线"}
-	descs := []string{"查看单条或二维地震剖面", "IL / XL / Time 三维联动浏览", "Crooked-line 地震数据浏览"}
-	fits := []string{"适合：常规 2D 数据浏览", "适合：规则三维体数据", "适合：非规则测线 / 弯线数据"}
+	titles := []string{"二维剖面", "三维数据体", "弯曲测线", "叠前道集"}
+	descs := []string{"查看单条或二维地震剖面", "IL / XL / Time 三维联动浏览", "Crooked-line 地震数据浏览", "CMP / Shot / Receiver 道集"}
+	fits := []string{"适合：常规 2D 数据浏览", "适合：规则三维体数据", "适合：非规则测线 / 弯线数据", "独立叠前 Geometry 与单道查看"}
 	for i, r := range l.cards {
 		hover := startHomeHover == i
 		pressed := startHomePressed == i && hover
@@ -800,9 +829,9 @@ func drawStartCenter(hdc uintptr) {
 	}
 
 	// The drop zone is deliberately the second interaction center. A dashed
-	// outline makes its role obvious without competing with the three cards.
-	dropHover := startHomeHover == 3 || startHomeDragActive
-	dropPressed := startHomePressed == 3 && startHomeHover == 3
+	// outline makes its role obvious without competing with the workspace cards.
+	dropHover := startHomeHover == startHomeDropHit || startHomeDragActive
+	dropPressed := startHomePressed == startHomeDropHit && startHomeHover == startHomeDropHit
 	dropFill := rgbRef(250, 251, 252)
 	dropBorder := rgbRef(203, 213, 225)
 	if dropHover {
@@ -832,7 +861,7 @@ func drawStartCenter(hdc uintptr) {
 	drawHomeText(hdc, startHomeFonts[1], rgbRef(55, 65, 81), "最近打开", l.recentHeader, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	if len(startHomeState.Recent) > 0 {
 		clearColor := rgbRef(156, 163, 175)
-		if startHomeHover == 4 {
+		if startHomeHover == startHomeClearHit {
 			clearColor = rgbRef(75, 85, 99)
 		}
 		drawHomeText(hdc, startHomeFonts[3], clearColor, "清空记录", l.clearRecent, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
@@ -883,10 +912,10 @@ func startHomeHitAt(x, y int) int {
 		}
 	}
 	if comparePointInRect(x, y, l.drop) {
-		return 3
+		return startHomeDropHit
 	}
 	if len(startHomeState.Recent) > 0 && comparePointInRect(x, y, l.clearRecent) {
-		return 4
+		return startHomeClearHit
 	}
 	for i, r := range l.recentRows {
 		removeR := RECT{Left: r.Right - 40, Top: r.Top, Right: r.Right, Bottom: r.Bottom}
@@ -944,13 +973,13 @@ func clearRecentHistory() {
 
 func activateStartHomeHit(hit int) bool {
 	switch {
-	case hit >= 0 && hit <= 2:
+	case hit >= 0 && hit < startHomeCardCount:
 		chooseHomeFile(hit + 1)
 		return true
-	case hit == 3:
+	case hit == startHomeDropHit:
 		chooseHomeFile(0)
 		return true
-	case hit == 4:
+	case hit == startHomeClearHit:
 		clearRecentHistory()
 		return true
 	case hit >= 10 && hit < 15:

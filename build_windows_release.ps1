@@ -1,5 +1,5 @@
 param(
-    [string]$Output = "SeisForgeStudio_v1.9.15_windows_x64.exe"
+    [string]$Output = "SeisForgeStudio_v1.10.2_prestack_raw_order_x64.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,6 +25,10 @@ if (-not $goExe) { throw "Go toolchain was not found." }
 
 Push-Location $repoPath
 try {
+    # Keep release verification independent of a locked or ACL-restricted
+    # user-wide Go build cache. The repository ignores this temporary cache.
+    $releaseGoCache = Join-Path $repoPath ".tmp-go-cache"
+    $env:GOCACHE = $releaseGoCache
     & $goExe test ./... -count=1
     if ($LASTEXITCODE -ne 0) { throw "go test failed with exit code $LASTEXITCODE" }
 

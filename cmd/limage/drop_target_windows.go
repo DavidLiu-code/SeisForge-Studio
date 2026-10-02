@@ -174,8 +174,8 @@ func setStartCenterDragFeedback(active bool) {
 	}
 	startHomeDragActive = active
 	if active {
-		startHomeHover = 3
-	} else if startHomeHover == 3 {
+		startHomeHover = startHomeDropHit
+	} else if startHomeHover == startHomeDropHit {
 		startHomeHover = -1
 	}
 	invalidateCompareBase()

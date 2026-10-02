@@ -14,7 +14,8 @@ import (
 )
 
 // Kind values 1/2/3 intentionally retain the existing recent.json numeric
-// representation used by Limage 1.8.7.
+// representation used by Limage 1.8.7. New workspaces append their own value;
+// they never alter the automatic post-stack recommendation routes.
 type Kind uint8
 
 const (
@@ -22,6 +23,7 @@ const (
 	Kind2D
 	Kind3D
 	KindCrooked
+	KindPrestack
 	KindAuto Kind = 255
 )
 
@@ -35,6 +37,8 @@ func (k Kind) String() string {
 		return "Volume3D"
 	case KindCrooked:
 		return "Crooked"
+	case KindPrestack:
+		return "Prestack"
 	case KindAuto:
 		return "Auto"
 	default:

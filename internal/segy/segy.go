@@ -932,7 +932,34 @@ func (s *File) RenderTraceIndicesValues(traceIndices []int64, o RenderOptions) (
 	var vals []float64
 	var observedMin, observedMax float64
 	var err error
-	if shouldUseSmooth(o.DisplayMode, len(traceIndices), sm1-sm0+1, o.Width, o.Height) {
+	var sparseStats sparseIOStats
+	var ioStats coalescedIOStats
+	// Keep the sparse read strategy consistent with RenderTracePositions.  The
+	// prestack gather renderer supplies physical trace indices (rather than
+	// monotonically spaced geometry positions), so it comes through this API.
+	// Previously ReadStrategySparseMapped was silently ignored here and the
+	// caller fell back to the legacy full-column reader.  Besides wasting I/O,
+	// that made it impossible to compare the two paths when diagnosing dark
+	// pixels during gather zoom.  The sparse path uses the same interpolation
+	// and sample support plans as the crooked renderer and therefore preserves
+	// pixel values exactly.
+	if o.ReadStrategy == ReadStrategySparseMapped || o.ReadStrategy == ReadStrategySparseCoalesced {
+		if shouldUseSmooth(o.DisplayMode, len(traceIndices), sm1-sm0+1, o.Width, o.Height) {
+			positions := make([]float64, len(traceIndices))
+			for i := range positions {
+				positions[i] = float64(i)
+			}
+			values, minValue, maxValue, stats, sparseErr := s.renderInterpolatedPositionsSparse(traceIndices, positions, 0, float64(len(traceIndices)-1), o, sm0, sm1, o.ReadStrategy == ReadStrategySparseMapped)
+			vals, observedMin, observedMax, sparseStats, err = values, minValue, maxValue, stats, sparseErr
+		} else {
+			values, minValue, maxValue, stats, sparseErr := s.renderColumnsSparse(o, traceForX, len(traceIndices), sm0, sm1, o.ReadStrategy == ReadStrategySparseMapped)
+			vals, observedMin, observedMax, sparseStats, err = values, minValue, maxValue, stats, sparseErr
+		}
+	} else if o.ReadStrategy == ReadStrategyCoalesced {
+		// Preserve the existing coalesced implementation for callers that do not
+		// need the output-driven sparse support plan.
+		vals, observedMin, observedMax, ioStats, err = s.renderColumnsCoalesced(o, traceForX, sm0, sm1)
+	} else if shouldUseSmooth(o.DisplayMode, len(traceIndices), sm1-sm0+1, o.Width, o.Height) {
 		vals, observedMin, observedMax, err = s.renderInterpolatedTraces(traceIndices, o, sm0, sm1)
 	} else {
 		vals, observedMin, observedMax, err = s.renderColumnsParallel(o, traceForX, sm0, sm1)
@@ -940,7 +967,15 @@ func (s *File) RenderTraceIndicesValues(traceIndices []int64, o RenderOptions) (
 	if err != nil {
 		return nil, RenderStats{}, err
 	}
-	st := RenderStats{ObservedMin: observedMin, ObservedMax: observedMax, SampleStart: sm0, SampleEnd: sm1, TraceStep: 1}
+	st := RenderStats{ObservedMin: observedMin, ObservedMax: observedMax, SampleStart: sm0, SampleEnd: sm1, TraceStep: 1,
+		IOReadCalls: ioStats.readCalls, IOCoalescedBlocks: ioStats.readCalls, IOReadBytes: ioStats.readBytes,
+		CoalescedIO: o.ReadStrategy == ReadStrategyCoalesced}
+	if o.ReadStrategy == ReadStrategySparseMapped || o.ReadStrategy == ReadStrategySparseCoalesced {
+		st.IOReadCalls, st.IOCoalescedBlocks, st.IOReadBytes = sparseStats.readCalls, sparseStats.readCalls, sparseStats.readBytes
+		st.CoalescedIO, st.SparseIO, st.MappedIO = sparseStats.fallbacks > 0, true, sparseStats.mapped
+		st.InputTraceCount, st.SupportTraceCount = sparseStats.inputTraces, sparseStats.supportTraces
+		st.IOLogicalBytes, st.IODecodeNanos, st.DecodedSampleCount, st.IOFallbacks = sparseStats.logicalBytes, sparseStats.decodeNanos, sparseStats.decodedSamples, sparseStats.fallbacks
+	}
 	st.TraceStart = traceIndices[0]
 	st.TraceEnd = traceIndices[len(traceIndices)-1]
 	return vals, st, nil

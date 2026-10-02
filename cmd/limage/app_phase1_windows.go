@@ -34,6 +34,7 @@ func initializePhase1Application() error {
 		&lineWorkspaceAdapter{kind: workspacecore.Kind2D},
 		&volumeWorkspaceAdapter{},
 		&crookedWorkspaceAdapter{},
+		&prestackWorkspaceAdapter{},
 	} {
 		if err := application.Workspaces.Register(adapter); err != nil {
 			return err
@@ -295,7 +296,9 @@ func openApplicationPath(path string, legacyMode int) bool {
 	data, err := application.OpenPath(kind, path)
 	if err != nil {
 		owner := compareHwnd
-		if volumeHwnd != 0 {
+		if prestackHwnd != 0 && kind == workspacecore.KindPrestack {
+			owner = prestackHwnd
+		} else if volumeHwnd != 0 {
 			owner = volumeHwnd
 		}
 		message(owner, APP_NAME+" - Open error", err.Error(), MB_OK|MB_ICONERROR)
@@ -366,6 +369,8 @@ func phase1WorkspaceKind(mode int) workspacecore.Kind {
 		return workspacecore.Kind3D
 	case workspaceModeCrooked:
 		return workspacecore.KindCrooked
+	case workspaceModePrestack:
+		return workspacecore.KindPrestack
 	default:
 		return workspacecore.KindAuto
 	}
@@ -377,6 +382,8 @@ func phase1LegacyMode(kind workspacecore.Kind) int {
 		return workspaceMode3D
 	case workspacecore.KindCrooked:
 		return workspaceModeCrooked
+	case workspacecore.KindPrestack:
+		return workspaceModePrestack
 	default:
 		return workspaceMode2D
 	}

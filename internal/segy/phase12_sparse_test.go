@@ -2,6 +2,7 @@ package segy
 
 import (
 	"bytes"
+	"math"
 	"reflect"
 	"runtime"
 	"sync/atomic"
@@ -81,6 +82,65 @@ func TestPhase12SparseMappedAndFallbackMatchLegacyPixels(t *testing.T) {
 	}
 	if active := atomic.LoadInt64(&activeReadMappings); active != 0 {
 		t.Fatalf("mapped readers leaked after close: %d", active)
+	}
+}
+
+// RenderTraceIndices is the API used by prestack gathers.  Keep an explicit
+// regression here so selecting the sparse strategy cannot silently fall back
+// to the legacy reader (or introduce zero-filled pixels while zooming).
+func TestPhase12SparseMappedTraceIndicesMatchLegacy(t *testing.T) {
+	for _, format := range []int{1, 2, 5} {
+		path := writePhase9FormatFixture(t, format)
+		indices := make([]int64, 48)
+		for i := range indices {
+			indices[i] = int64(i)
+		}
+		for _, options := range []RenderOptions{
+			{Width: 19, Height: 51, GainPercent: 0, ClipPercent: 99, SampleStart: 3, SampleEnd: 59, DisplayMode: DisplaySmooth, Workers: 4},
+			{Width: 31, Height: 79, GainPercent: 17, ClipPercent: 99, AGC: true, SampleStart: 2, SampleEnd: 61, DisplayMode: DisplayAdaptive, Workers: 2},
+			{Width: 15, Height: 43, GainPercent: 49, ClipPercent: 99, SampleStart: 4, SampleEnd: 55, DisplayMode: DisplayNearest, Workers: 4},
+		} {
+			legacyFile, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy, legacyStats, err := legacyFile.RenderTraceIndices(indices, options)
+			_ = legacyFile.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			sparseFile, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sparseOptions := options
+			sparseOptions.ReadStrategy = ReadStrategySparseMapped
+			sparse, sparseStats, err := sparseFile.RenderTraceIndices(indices, sparseOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(sparse, legacy) {
+				t.Fatalf("format %d sparse trace-index pixels changed for %+v", format, options)
+			}
+			if !sparseStats.SparseIO || !sparseStats.MappedIO || sparseStats.InputTraceCount != len(indices) || sparseStats.SupportTraceCount <= 0 {
+				t.Fatalf("format %d sparse trace-index statistics missing: %+v", format, sparseStats)
+			}
+			// Min/max reductions can differ by one ULP because the sparse path
+			// visits the same values in a different worker order. Pixel bytes
+			// above are the strict regression; compare key stats with tolerance.
+			if math.Abs(sparseStats.ObservedMin-legacyStats.ObservedMin) > 1e-12 ||
+				math.Abs(sparseStats.ObservedMax-legacyStats.ObservedMax) > 1e-12 ||
+				math.Abs(sparseStats.MapMin-legacyStats.MapMin) > 1e-12 ||
+				math.Abs(sparseStats.MapMax-legacyStats.MapMax) > 1e-12 ||
+				sparseStats.SampleStart != legacyStats.SampleStart || sparseStats.SampleEnd != legacyStats.SampleEnd {
+				t.Fatalf("format %d sparse trace-index stats changed:\nlegacy=%+v\nsparse=%+v", format, legacyStats, sparseStats)
+			}
+			_ = sparseFile.Close()
+		}
+	}
+	if active := atomic.LoadInt64(&activeReadMappings); active != 0 {
+		t.Fatalf("mapped readers leaked after trace-index regression: %d", active)
 	}
 }
 

@@ -15,6 +15,7 @@ bin/
 build/
 dist/
 /.tmp-go-cache/
+/.gocache*/
 exports/
 output/
 

@@ -1,0 +1,340 @@
+// Package prestack provides metadata-only gather and acquisition geometry
+// indexes. It does not reuse the post-stack one-trace-per-bin GeometryIndex,
+// own a SEG-Y Reader, store amplitudes, or write a cache or source file.
+package prestack
+
+import (
+	"fmt"
+	"math"
+)
+
+type GatherType uint8
+
+const (
+	GatherCMP GatherType = iota
+	GatherShot
+	GatherReceiver
+	// GatherOffset groups physical traces into configurable offset bins.  Keep
+	// the values above stable: they are used by the existing UI and Recent
+	// workspace routing.
+	GatherOffset
+	// GatherRaw is the ungrouped physical file order.  It deliberately comes
+	// after the historical gather values so persisted/UI enum values remain
+	// compatible with CMP, Shot, Receiver and Common Offset.
+	GatherRaw
+)
+
+const DefaultOffsetBinSize = 20.0
+
+// GatherCMPBin is the explicit name used by mapping pages; it aliases the
+// CMP/Bin gather without introducing another index table.
+const GatherCMPBin = GatherCMP
+
+func (k GatherType) String() string {
+	switch k {
+	case GatherCMP:
+		return "CMP"
+	case GatherShot:
+		return "Shot"
+	case GatherReceiver:
+		return "Receiver"
+	case GatherOffset:
+		return "Common Offset"
+	case GatherRaw:
+		return "Raw Trace Order"
+	default:
+		return "Unknown"
+	}
+}
+
+type SortMode uint8
+
+const (
+	SortPhysical SortMode = iota
+	SortOffset
+	SortAbsoluteOffset
+	SortAzimuth
+)
+
+const SortAbsOffset = SortAbsoluteOffset
+
+type AxisMode uint8
+
+const (
+	AxisTrace AxisMode = iota
+	AxisOffset
+)
+
+// HeaderMapping uses signed 32-bit words for identifiers/coordinates and
+// signed 16-bit words for Scalar/Units. All byte positions are SEG-Y 1-based.
+// A zero position explicitly disables a field; DefaultHeaderMapping provides
+// the standard Rev 0/1 layout. Offset is NOT coordinate-scaled.
+type HeaderMapping struct {
+	SourceIDByte, ReceiverIDByte int
+	CDPByte, OffsetByte          int
+	SourceXByte, SourceYByte     int
+	ReceiverXByte, ReceiverYByte int
+	CDPXByte, CDPYByte           int
+	InlineByte, CrosslineByte    int
+	ScalarByte, UnitsByte        int
+}
+
+func DefaultHeaderMapping() HeaderMapping {
+	return HeaderMapping{SourceIDByte: 9, ReceiverIDByte: 13, CDPByte: 21, OffsetByte: 37,
+		SourceXByte: 73, SourceYByte: 77, ReceiverXByte: 81, ReceiverYByte: 85,
+		CDPXByte: 181, CDPYByte: 185, InlineByte: 189, CrosslineByte: 193, ScalarByte: 71, UnitsByte: 89}
+}
+
+func (m HeaderMapping) Validate() error {
+	for _, f := range []struct {
+		name            string
+		position, width int
+	}{
+		{"SourceID", m.SourceIDByte, 4}, {"ReceiverID", m.ReceiverIDByte, 4},
+		{"CDP", m.CDPByte, 4}, {"Offset", m.OffsetByte, 4},
+		{"SourceX", m.SourceXByte, 4}, {"SourceY", m.SourceYByte, 4},
+		{"ReceiverX", m.ReceiverXByte, 4}, {"ReceiverY", m.ReceiverYByte, 4},
+		{"CDPX", m.CDPXByte, 4}, {"CDPY", m.CDPYByte, 4},
+		{"Inline", m.InlineByte, 4}, {"Crossline", m.CrosslineByte, 4},
+		{"Scalar", m.ScalarByte, 2}, {"Units", m.UnitsByte, 2},
+	} {
+		if f.position < 0 || f.position+f.width-1 > 240 {
+			return fmt.Errorf("%s byte must be 0 (disabled) or 1..%d", f.name, 241-f.width)
+		}
+	}
+	for _, pair := range [][2]int{{m.SourceXByte, m.SourceYByte}, {m.ReceiverXByte, m.ReceiverYByte}, {m.CDPXByte, m.CDPYByte}, {m.InlineByte, m.CrosslineByte}} {
+		if (pair[0] == 0) != (pair[1] == 0) {
+			return fmt.Errorf("paired coordinate fields must both be enabled or disabled")
+		}
+	}
+	return nil
+}
+
+// A record contains no slice or map and keeps one metadata copy per physical
+// trace. TraceNumber is zero-based; display it as TraceNumber+1 in the UI.
+type PrestackTraceRecord struct {
+	TraceNumber                                                        int64
+	SourceID, ReceiverID, CDP, TraceInField, Inline, Crossline         int32
+	SourceX, SourceY, ReceiverX, ReceiverY, MidpointX, MidpointY       float64
+	HeaderOffset, ComputedOffset, Offset, Azimuth                      float64
+	CoordinateUnits, CoordinateScalar                                  int16
+	DelayMS, SampleIntervalUS, SampleCount                             int
+	HasSource, HasReceiver, HasMidpoint, HasComputedOffset, HasAzimuth bool
+	HasHeaderOffset, HasCDP, HasOffset                                 bool
+}
+
+// GatherKey is comparable. CMP uses either a real IL/XL pair (Grid=true), or
+// the original CDP value. Shot/Receiver always use ID. Common Offset keys use
+// an integer bin identity plus the configured display edges.
+type GatherKey struct {
+	Inline, Crossline, ID int32
+	Grid                  bool
+	Coordinate            bool
+	// All selects the complete physical record range for the requested
+	// gather type. It is a synthetic UI key and is intentionally not part of
+	// the compact per-key tables.
+	All bool
+	// Raw identifies the single synthetic key used by the ungrouped physical
+	// file-order selection. It is not persisted in any existing gather table.
+	Raw  bool
+	X, Y float64
+	// OffsetBin identifies a key generated by the Common Offset gather.  The
+	// integer bin index is the stable identity; the remaining fields describe
+	// the configured bin edges for display and diagnostics.
+	OffsetBin      bool
+	OffsetBinIndex int64
+	OffsetCenter   float64
+	OffsetMin      float64
+	OffsetMax      float64
+}
+
+func (k GatherKey) String() string {
+	if k.All {
+		return "全部范围"
+	}
+	if k.Raw {
+		return "Raw Trace Order"
+	}
+	if k.OffsetBin {
+		half := (k.OffsetMax - k.OffsetMin) / 2
+		if !(half > 0) || math.IsInf(half, 0) || math.IsNaN(half) {
+			half = DefaultOffsetBinSize / 2
+		}
+		return fmt.Sprintf("Offset %g ±%g", k.OffsetCenter, half)
+	}
+	if k.Coordinate {
+		return fmt.Sprintf("XY %g / %g", k.X, k.Y)
+	}
+	if k.Grid {
+		return fmt.Sprintf("IL %d / XL %d", k.Inline, k.Crossline)
+	}
+	return fmt.Sprintf("%d", k.ID)
+}
+
+type GatherSelection struct {
+	Type GatherType
+	Key  GatherKey
+	Sort SortMode
+	Axis AxisMode
+	// OffsetBinSize is used only for GatherOffset.  Values <= 0 or non-finite
+	// values use DefaultOffsetBinSize, making zero-value selections safe.
+	OffsetBinSize float64
+	// RawTraceStart/RawTraceEnd describe a zero-based half-open physical trace
+	// range when Type is GatherRaw.  A zero end means the file end, making the
+	// zero-value selection naturally mean the complete file.  Negative values
+	// are clamped to zero; reversed endpoints are normalized by Gather.
+	RawTraceStart, RawTraceEnd int64
+	// SampleStart/SampleEnd are an optional zero-based inclusive sample window
+	// carried with a raw selection for callers that want one immutable
+	// selection object.  SEG-Y rendering still owns sample-window validation;
+	// these fields are not used to group traces.
+	SampleStart, SampleEnd int
+}
+
+// RawTraceRange is a zero-based half-open physical trace interval.
+type RawTraceRange struct {
+	Start, End int64
+}
+
+// RawTraceSelection is the UI-independent form of an ungrouped physical
+// trace selection. TraceEnd is exclusive and all trace numbers are zero
+// based. SampleEnd is inclusive, matching segy.RenderOptions.
+type RawTraceSelection struct {
+	TraceStart, TraceEnd   int64
+	SampleStart, SampleEnd int
+}
+
+// NormalizeRawTraceRange clamps and normalizes a raw range to [start,end),
+// where end is exclusive. End <= 0 means the complete file. It is exported
+// so UI code can validate text-box input without duplicating boundary rules.
+func NormalizeRawTraceRange(total, start, end int64) (int64, int64, bool) {
+	if total <= 0 {
+		return 0, 0, false
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end <= 0 {
+		end = total
+	}
+	if start > total {
+		start = total
+	}
+	if end > total {
+		end = total
+	}
+	if start > end {
+		start, end = end, start
+	}
+	return start, end, start < end
+}
+
+type ValueRange struct {
+	Min, Max float64
+	Valid    bool
+}
+
+func (r *ValueRange) add(v float64) {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return
+	}
+	if !r.Valid {
+		r.Min, r.Max, r.Valid = v, v, true
+		return
+	}
+	if v < r.Min {
+		r.Min = v
+	}
+	if v > r.Max {
+		r.Max = v
+	}
+}
+
+type XYBounds struct {
+	XMin, XMax, YMin, YMax float64
+	Valid                  bool
+}
+
+func (b *XYBounds) add(x, y float64) {
+	if !b.Valid {
+		b.XMin, b.XMax, b.YMin, b.YMax, b.Valid = x, x, y, y, true
+		return
+	}
+	if x < b.XMin {
+		b.XMin = x
+	}
+	if x > b.XMax {
+		b.XMax = x
+	}
+	if y < b.YMin {
+		b.YMin = y
+	}
+	if y > b.YMax {
+		b.YMax = y
+	}
+}
+
+type GatherResult struct {
+	Selection                 GatherSelection
+	TraceIndices              []int64
+	Positions                 []float64
+	OffsetRange, AzimuthRange ValueRange
+	// RawTraceStart/RawTraceEnd retain the normalized physical range for raw
+	// selections, allowing a renderer/status bar to report it without
+	// reverse-engineering a downsampled TraceIndices slice.
+	RawTraceStart, RawTraceEnd int64
+}
+
+type Bin struct {
+	Key                       GatherKey
+	X, Y                      float64
+	HasCoordinates            bool
+	Fold                      int
+	OffsetRange, AzimuthRange ValueRange
+}
+
+type FoldStatistics struct {
+	Bins, Traces, Min, Max int
+	Mean                   float64
+}
+
+type IndexProgress struct {
+	Done, Scanned, Total int64
+	Stage                string
+}
+
+// gatherTable is a CSR-style compact gather index. Ordered record indices
+// belong to one flat allocation, not a map of per-gather trace slices.
+type gatherTable struct {
+	keys    []GatherKey
+	starts  []int
+	records []int
+}
+
+type PrestackIndex struct {
+	SourcePath                string
+	Mapping                   HeaderMapping
+	Records                   []PrestackTraceRecord
+	Bins                      []Bin
+	Bounds                    XYBounds
+	OffsetRange, AzimuthRange ValueRange
+	Warnings                  []string
+	UsesGrid                  bool
+	ReceiverUsesCoordinates   bool
+	tables                    [3]gatherTable
+	fold                      FoldStatistics
+}
+
+func (p *PrestackIndex) FoldStats() FoldStatistics {
+	if p == nil {
+		return FoldStatistics{}
+	}
+	return p.fold
+}
+
+// Future extension contracts, deliberately unused by the MVP viewer.
+type GatherMatcher interface {
+	Match(a, b GatherResult) ([]TracePair, error)
+}
+type TracePair struct{ A, B int64 }
+type RebinConfig struct{ OriginX, OriginY, InlineSpacing, CrosslineSpacing, RotationDegrees float64 }

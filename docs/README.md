@@ -1,6 +1,6 @@
 # SeisForge Studio 文档
 
-本目录提供 SeisForge Studio 1.9.15 的使用、构建、架构和兼容性说明。
+本目录提供 SeisForge Studio 1.10.2 的使用、构建、架构和兼容性说明。
 
 ## 使用者
 
@@ -8,7 +8,10 @@
 - [快捷键与鼠标操作](SHORTCUTS.md)：二维、弯线、真三维和伪三维交互速查。
 - [兼容性说明](COMPATIBILITY.md)：旧 Limage 设置、缓存、Recent 和许可证的保留策略。
 - [1.9.15 发布说明](releases/v1.9.15.md)：可直接用于 GitHub Release 的下载、校验和升级说明。
-- [版本记录](../CHANGELOG.md)：1.9.x 用户可见变化。
+- [1.10.0 发布说明](releases/v1.10.0.md)：叠前独立工作区、道头索引、道集与 Geometry 使用说明。
+- [1.10.2 发布说明](releases/v1.10.2.md)：原始叠前道序、范围读取和窗口调整稳定性。
+- [原始叠前道序架构](architecture/ARCHITECTURE_PRESTACK_RAW_ORDER.md)：物理道序、范围、代次和窗口尺寸生命周期。
+- [版本记录](../CHANGELOG.md)：1.9.x–1.10.x 用户可见变化。
 
 ## 开发者
 
