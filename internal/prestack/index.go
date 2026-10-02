@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"runtime"
 	"sort"
 	"sync"
@@ -36,7 +38,7 @@ func BuildIndex(ctx context.Context, reader *segy.File, mapping HeaderMapping, p
 	if n < 1 || int64(int(n)) != n {
 		return nil, errors.New("invalid trace count")
 	}
-	p := &PrestackIndex{SourcePath: reader.Info.Path, Mapping: mapping, Records: make([]PrestackTraceRecord, int(n))}
+	p := &PrestackIndex{SourcePath: reader.Info.Path, Mapping: mapping, Records: make([]PrestackTraceRecord, int(n)), BinarySampleCount: reader.Info.SamplesPerTrace, BinarySampleIntervalUS: reader.Info.SampleIntervalUS}
 	workers := min(runtime.GOMAXPROCS(0), 4, int(n))
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -59,6 +61,17 @@ func BuildIndex(ctx context.Context, reader *segy.File, mapping HeaderMapping, p
 						return
 					}
 					if err := reader.ReadTraceHeaderBytes(trace, raw[:]); err != nil {
+						if errors.Is(err, os.ErrClosed) || errors.Is(err, os.ErrPermission) {
+							errOnce.Do(func() { firstErr = fmt.Errorf("read trace header %d: %w", trace+1, err); cancel() })
+							return
+						}
+						// A short/malformed individual header remains in its physical
+						// slot.  QC reports it and the other valid traces are usable.
+						if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+							p.Records[trace] = PrestackTraceRecord{TraceNumber: trace, HeaderError: err.Error()}
+							done.Add(1)
+							continue
+						}
 						errOnce.Do(func() { firstErr = fmt.Errorf("read trace header %d: %w", trace+1, err); cancel() })
 						return
 					}
@@ -95,6 +108,7 @@ func BuildIndex(ctx context.Context, reader *segy.File, mapping HeaderMapping, p
 			if err := p.buildTables(ctx); err != nil {
 				return nil, err
 			}
+			p.quality = computeQualityStats(p)
 			if progress != nil {
 				progress(IndexProgress{Done: n, Scanned: n, Total: n, Stage: "完成"})
 			}
@@ -141,6 +155,14 @@ func decodeRecord(trace int64, raw []byte, info segy.Info, m HeaderMapping) Pres
 		ReceiverX: float64(word32(raw, m.ReceiverXByte, e)) * factor, ReceiverY: float64(word32(raw, m.ReceiverYByte, e)) * factor,
 		HeaderOffset: float64(word32(raw, m.OffsetByte, e)), CoordinateScalar: scalar, CoordinateUnits: word16(raw, m.UnitsByte, e),
 		DelayMS: int(word16(raw, 109, e)), SampleIntervalUS: int(uint16(word16(raw, 117, e))), SampleCount: int(uint16(word16(raw, 115, e)))}
+	r.HeaderValid = true
+	r.HeaderSampleCount, r.HeaderSampleIntervalUS = r.SampleCount, r.SampleIntervalUS
+	r.CoordinateScalarValid = !math.IsNaN(factor) && !math.IsInf(factor, 0) && factor > 0
+	r.CoordinateScalarError = !r.CoordinateScalarValid
+	if r.SampleCount == 0 || r.SampleIntervalUS == 0 {
+		r.HeaderValid = false
+		r.HeaderError = "道头样点数或采样间隔为零；显示使用卷头参数"
+	}
 	r.Offset = r.HeaderOffset
 	r.HasHeaderOffset = m.OffsetByte > 0
 	r.HasOffset = r.HasHeaderOffset
@@ -197,8 +219,11 @@ func (p *PrestackIndex) buildTables(ctx context.Context) error {
 			}
 		}
 		r := &p.Records[i]
-		r.HasSource = sourcePresent && (r.SourceX != 0 || r.SourceY != 0)
-		r.HasReceiver = receiverPresent && (r.ReceiverX != 0 || r.ReceiverY != 0)
+		// A coordinate at the origin is still a legal SEG-Y coordinate. Presence
+		// is determined by a configured field and finite decoded values rather
+		// than by a non-zero test.
+		r.HasSource = sourcePresent && finiteXY(r.SourceX, r.SourceY)
+		r.HasReceiver = receiverPresent && finiteXY(r.ReceiverX, r.ReceiverY)
 		if r.HasSource {
 			p.Bounds.add(r.SourceX, r.SourceY)
 		}
@@ -225,7 +250,7 @@ func (p *PrestackIndex) buildTables(ctx context.Context) error {
 				r.HasAzimuth = true
 			}
 		} else {
-			r.HasMidpoint = cdpXYPresent && (r.MidpointX != 0 || r.MidpointY != 0)
+			r.HasMidpoint = cdpXYPresent && finiteXY(r.MidpointX, r.MidpointY)
 		}
 		if r.HasMidpoint {
 			p.Bounds.add(r.MidpointX, r.MidpointY)
@@ -249,6 +274,13 @@ func (p *PrestackIndex) buildTables(ctx context.Context) error {
 		receiverIDs = false
 		p.Warnings = append(p.Warnings, "道序/炮内道号不能确认全局检波点身份；Receiver 道集需指定可靠 ID 或坐标")
 	}
+	// Apply the same stability rule to Source/Shot IDs before constructing the
+	// compact Shot table. A reused source ID at different coordinates must not
+	// silently merge unrelated shots.
+	p.SourceUsesCoordinates = acquisitionIDConflicts(p.Records, GatherShot)
+	if p.SourceUsesCoordinates {
+		p.Warnings = append(p.Warnings, "Source ID 不是稳定的全局震源标识，按实际 Source XY 组织炮集")
+	}
 	keyFor := func(kind GatherType, r PrestackTraceRecord) (GatherKey, bool) {
 		switch kind {
 		case GatherCMP:
@@ -260,6 +292,9 @@ func (p *PrestackIndex) buildTables(ctx context.Context) error {
 			}
 			return GatherKey{Coordinate: true, X: r.MidpointX, Y: r.MidpointY}, r.HasMidpoint
 		case GatherShot:
+			if p.SourceUsesCoordinates {
+				return GatherKey{Coordinate: true, X: r.SourceX, Y: r.SourceY}, r.HasSource
+			}
 			return GatherKey{ID: r.SourceID}, sourceIDs && r.SourceID != 0
 		case GatherReceiver:
 			if p.ReceiverUsesCoordinates {
@@ -302,6 +337,7 @@ func (p *PrestackIndex) buildTables(ctx context.Context) error {
 		}
 	}
 	p.buildBins()
+	p.buildAcquisition()
 	return ctx.Err()
 }
 

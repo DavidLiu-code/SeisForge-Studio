@@ -121,6 +121,15 @@ type PrestackTraceRecord struct {
 	DelayMS, SampleIntervalUS, SampleCount                             int
 	HasSource, HasReceiver, HasMidpoint, HasComputedOffset, HasAzimuth bool
 	HasHeaderOffset, HasCDP, HasOffset                                 bool
+	// HeaderValid is false when the 240-byte header could not be read or a
+	// critical structural field was invalid.  The record is retained in its
+	// physical position so QC can report the problem without changing trace
+	// numbering.
+	HeaderValid                               bool
+	HeaderError                               string
+	HeaderSampleCount, HeaderSampleIntervalUS int
+	CoordinateScalarValid                     bool
+	CoordinateScalarError                     bool
 }
 
 // GatherKey is comparable. CMP uses either a real IL/XL pair (Grid=true), or
@@ -230,8 +239,9 @@ func NormalizeRawTraceRange(total, start, end int64) (int64, int64, bool) {
 }
 
 type ValueRange struct {
-	Min, Max float64
-	Valid    bool
+	Min   float64 `json:"min"`
+	Max   float64 `json:"max"`
+	Valid bool    `json:"valid"`
 }
 
 func (r *ValueRange) add(v float64) {
@@ -294,8 +304,76 @@ type Bin struct {
 }
 
 type FoldStatistics struct {
-	Bins, Traces, Min, Max int
-	Mean                   float64
+	Bins   int     `json:"bins"`
+	Traces int     `json:"traces"`
+	Min    int     `json:"min"`
+	Max    int     `json:"max"`
+	Mean   float64 `json:"mean"`
+}
+
+// DistributionBin is one adaptive histogram bucket.  CurrentCount is used by
+// QC reports to highlight the currently selected gather without changing the
+// file-wide distribution stored on PrestackIndex.
+type DistributionBin struct {
+	Min          float64 `json:"min"`
+	Max          float64 `json:"max"`
+	Count        int     `json:"count"`
+	CurrentCount int     `json:"current_count,omitempty"`
+}
+
+// Distribution is a compact, metadata-only histogram.  Values are never
+// copied into the index; only bucket boundaries and counts are retained.
+type Distribution struct {
+	Min  float64           `json:"min"`
+	Max  float64           `json:"max"`
+	Bins []DistributionBin `json:"bins"`
+}
+
+// QualityStats contains file and gather quality counters.  It intentionally
+// contains no amplitude values or sample arrays and is safe to serialize in a
+// QC report.
+type QualityStats struct {
+	TotalTraces                int            `json:"total_traces"`
+	IndexedTraces              int            `json:"indexed_traces"`
+	ValidHeaderTraces          int            `json:"valid_header_traces"`
+	InvalidHeaderTraces        int            `json:"invalid_header_traces"`
+	MissingCDP                 int            `json:"missing_cdp"`
+	MissingFFID                int            `json:"missing_ffid"`
+	MissingSource              int            `json:"missing_source"`
+	MissingReceiver            int            `json:"missing_receiver"`
+	MissingOffset              int            `json:"missing_offset"`
+	CoordinateScalarErrors     int            `json:"coordinate_scalar_errors"`
+	SampleCountInconsistent    int            `json:"sample_count_inconsistent"`
+	SampleIntervalInconsistent int            `json:"sample_interval_inconsistent"`
+	CMPCount                   int            `json:"cmp_count"`
+	ShotCount                  int            `json:"shot_count"`
+	ReceiverCount              int            `json:"receiver_count"`
+	CommonOffsetBinCount       int            `json:"common_offset_bin_count"`
+	Fold                       FoldStatistics `json:"fold"`
+	OffsetRange                ValueRange     `json:"offset_range"`
+	AzimuthRange               ValueRange     `json:"azimuth_range"`
+	FoldDistribution           Distribution   `json:"fold_distribution"`
+	OffsetDistribution         Distribution   `json:"offset_distribution"`
+	AzimuthDistribution        Distribution   `json:"azimuth_distribution"`
+}
+
+// GatherQCSummary describes the active gather at report time.
+type GatherQCSummary struct {
+	Type               string     `json:"type"`
+	Key                string     `json:"key"`
+	PhysicalTraceCount int        `json:"physical_trace_count"`
+	Fold               int        `json:"fold"`
+	OffsetRange        ValueRange `json:"offset_range"`
+	AzimuthRange       ValueRange `json:"azimuth_range"`
+}
+
+// QCReport is the stable, metadata-only export model used by the UI.  JSON
+// tags are kept explicit so reports remain readable outside Go.
+type QCReport struct {
+	Version       string          `json:"version"`
+	SourcePath    string          `json:"source_path"`
+	Quality       QualityStats    `json:"quality"`
+	CurrentGather GatherQCSummary `json:"current_gather"`
 }
 
 type IndexProgress struct {
@@ -321,8 +399,26 @@ type PrestackIndex struct {
 	Warnings                  []string
 	UsesGrid                  bool
 	ReceiverUsesCoordinates   bool
-	tables                    [3]gatherTable
-	fold                      FoldStatistics
+	// SourceUsesCoordinates is true when a Source/Shot identifier is reused
+	// for multiple physical locations (or when only coordinates are mapped).
+	// In that case acquisition associations use the complete XY coordinate as
+	// their key instead of silently merging unrelated shots.
+	SourceUsesCoordinates  bool
+	BinarySampleCount      int
+	BinarySampleIntervalUS int
+	tables                 [3]gatherTable
+	fold                   FoldStatistics
+	quality                QualityStats
+
+	// Acquisition point arrays and trace lookup tables are built from the same
+	// metadata records as the gather CSR tables.  They never own amplitude
+	// data; slices returned by the public accessors are defensive copies.
+	sourcePoints         []AcquisitionPoint
+	receiverPoints       []AcquisitionPoint
+	sourcePointByTrace   []int
+	receiverPointByTrace []int
+	sourceSpatial        acquisitionSpatialIndex
+	receiverSpatial      acquisitionSpatialIndex
 }
 
 func (p *PrestackIndex) FoldStats() FoldStatistics {

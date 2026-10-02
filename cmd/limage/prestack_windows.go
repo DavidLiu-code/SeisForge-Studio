@@ -57,6 +57,7 @@ const (
 	IDPRESTACK_LAYER_BIN
 	IDPRESTACK_LAYER_FOLD
 	IDPRESTACK_MAPRESET
+	IDPRESTACK_QC_EXPORT
 	IDPRESTACK_MAPBYTE   = 8200
 	WM_PRESTACK_READY    = WM_USER + 610
 	WM_PRESTACK_PROGRESS = WM_USER + 611
@@ -93,6 +94,7 @@ const (
 
 type prestackControls struct {
 	home, open, path, tabs, status, progress, progressLabel                             uintptr
+	qcExport                                                                            uintptr
 	kind, key, prev, next, sort, axis, display, palette                                 uintptr
 	offsetBinLabel, offsetBin, offsetBinApply                                           uintptr
 	rawTraceStartLabel, rawTraceStart, rawTraceEndLabel, rawTraceEnd                    uintptr
@@ -120,11 +122,13 @@ type prestackSession struct {
 	offsetBinSize                                        float64
 	agc                                                  bool
 	workspaceGeneration                                  uint64
+	datasetGeneration, selectionGeneration, ownerToken   int64
 	indexGeneration, renderGeneration                    int64
 	resizeGeneration                                     int64
 	indexCancel, renderCancel                            context.CancelFunc
 	loading, rendering, needsIndex, progressDone         bool
 	resizeActive, resizePending                          bool
+	suppressPageRender                                   bool
 	viewFirst, viewLast, sampleFirst, sampleLast         int
 	indices, bgra                                        []byte
 	imageWidth, imageHeight                              int
@@ -137,9 +141,22 @@ type prestackSession struct {
 	dragMap                                              prestackcore.XYBounds
 	dragFirst, dragLast, dragSampleFirst, dragSampleLast int
 	lastHover                                            time.Time
+	linkKind                                             prestackcore.GatherType
+	linkIndex                                            int
+	linkGeneration                                       uint64
+}
+
+// Workers capture this identity on the UI thread and never read mutable
+// presentation state. HWND alone is insufficient because Windows reuses it.
+type prestackAsyncToken struct {
+	owner                                                              uintptr
+	ownerToken, datasetGeneration, selectionGeneration, sizeGeneration int64
+	workspaceGeneration                                                uint64
+	sceneWidth, sceneHeight, page                                      int
 }
 
 type prestackIndexResult struct {
+	token      prestackAsyncToken
 	generation int64
 	index      *prestackcore.PrestackIndex
 	detection  prestackcore.MappingDetection
@@ -147,8 +164,10 @@ type prestackIndexResult struct {
 	err        error
 }
 type prestackRenderResult struct {
+	token               prestackAsyncToken
 	generation          int64
 	workspaceGeneration uint64
+	palette             int
 	indices, bgra       []byte
 	width, height       int
 	stats               segy.RenderStats
@@ -156,17 +175,20 @@ type prestackRenderResult struct {
 }
 
 var (
-	prestackHwnd                                    uintptr
-	prestackUI                                      prestackControls
-	prestackState                                   prestackSession
-	prestackClassRegistered, prestackManagerClosing bool
-	prestackGeneration                              int64
-	prestackDeliveryMu                              sync.Mutex
-	prestackDeliveryHwnd                            uintptr
-	prestackPendingIndex                            *prestackIndexResult
-	prestackPendingRender                           *prestackRenderResult
-	prestackProgress                                int64
-	prestackRenderSlot                              = make(chan struct{}, 1)
+	prestackHwnd                                                      uintptr
+	prestackUI                                                        prestackControls
+	prestackState                                                     prestackSession
+	prestackClassRegistered, prestackManagerClosing                   bool
+	prestackGeneration                                                int64
+	prestackDeliveryMu                                                sync.Mutex
+	prestackDeliveryHwnd                                              uintptr
+	prestackOwnerToken                                                int64
+	prestackDeliveryOwnerToken                                        int64
+	prestackDeliveryIndexGeneration, prestackDeliveryRenderGeneration int64
+	prestackPendingIndex                                              *prestackIndexResult
+	prestackPendingRender                                             *prestackRenderResult
+	prestackProgress                                                  int64
+	prestackRenderSlot                                                = make(chan struct{}, 1)
 )
 
 // MK_CONTROL is included in the low word of wParam for mouse messages.  A
@@ -186,6 +208,7 @@ func (*prestackWorkspaceAdapter) Open(r workspacecore.OpenRequest) error {
 	}
 	cancelPrestackJobs()
 	prestackState = prestackSession{dataset: r.Dataset, mapping: prestackcore.DefaultHeaderMapping(), palette: 2,
+		datasetGeneration: atomic.AddInt64(&prestackGeneration, 1), ownerToken: prestackOwnerToken,
 		workspaceGeneration: r.Generation, sampleLast: r.Dataset.Metadata.SamplesPerTrace - 1,
 		mapLayers: [5]bool{true, true, true, true, true}}
 	prestackState.sampleFirst, prestackState.sampleLast = int(r.EffectiveSampleRange().Start), int(r.EffectiveSampleRange().End)
@@ -240,8 +263,10 @@ func createPrestackWindowShell() bool {
 		return false
 	}
 	prestackHwnd = h
+	prestackOwnerToken = atomic.AddInt64(&prestackGeneration, 1)
 	prestackDeliveryMu.Lock()
 	prestackDeliveryHwnd = h
+	prestackDeliveryOwnerToken = prestackOwnerToken
 	prestackDeliveryMu.Unlock()
 	createPrestackControls()
 	acceptSegyDrops(h)
@@ -353,7 +378,7 @@ func createPrestackControls() {
 	u.progressLabel = createCtrl(prestackHwnd, "STATIC", "准备中", WS_CHILD|WS_BORDER|prestackSSCenter, 0, 0, 160, 18, 0)
 	pSendMessageW.Call(u.progress, PBM_SETRANGE, 0, uintptr(uint32(100)<<16))
 	u.tabs = createCtrl(prestackHwnd, "SysTabControl32", "", WS_CHILD|WS_TABSTOP, 0, 0, 900, 28, IDPRESTACK_TABS)
-	for i, label := range []string{"道集 Gather", "几何 Geometry", "道头映射 Mapping / Header", "对比 Compare"} {
+	for i, label := range []string{"道集 Gather", "几何 Geometry", "道头映射 Mapping / Header", "对比 Compare", "QC"} {
 		item := TCITEM{Mask: TCIF_TEXT, PszText: u16(label)}
 		pSendMessageW.Call(u.tabs, TCM_INSERTITEMW, uintptr(i), uintptr(unsafe.Pointer(&item)))
 	}
@@ -392,6 +417,7 @@ func createPrestackControls() {
 	u.mappingAuto = prestackButton(IDPRESTACK_MAPPING_AUTO, "自动检测")
 	u.mappingApply = prestackButton(IDPRESTACK_MAPPING_APPLY, "确认映射并建立索引")
 	u.mappingText = createCtrl(prestackHwnd, "EDIT", "", WS_CHILD|WS_BORDER|WS_VSCROLL|ES_READONLY|traceESMultiline|traceESAutoVScroll, 0, 0, 700, 300, 0)
+	u.qcExport = prestackButton(IDPRESTACK_QC_EXPORT, "导出 QC 报告")
 	configurePrestackKeyCombo()
 	for i, f := range prestackMappingFields(&prestackState.mapping) {
 		u.mappingLabels = append(u.mappingLabels, createCtrl(prestackHwnd, "STATIC", f.label+" byte", WS_CHILD, 0, 0, 190, 22, 0))
@@ -578,6 +604,9 @@ func applyPrestackRawRange() {
 	startPrestackRender()
 }
 func setPrestackPage(page int) {
+	if page != prestackState.page {
+		prestackClearLink()
+	}
 	prestackState.page = page
 	if page != 0 {
 		// A delayed resize flush belongs only to the Gather scene.  Do not let
@@ -586,7 +615,7 @@ func setPrestackPage(page int) {
 	}
 	pSendMessageW.Call(prestackUI.tabs, TCM_FIRST+12, uintptr(page), 0)
 	layoutPrestackControls()
-	if page == 0 && prestackState.index != nil && len(prestackState.indices) == 0 && !prestackState.rendering && !prestackState.resizeActive && !prestackState.resizePending {
+	if page == 0 && prestackState.index != nil && len(prestackState.indices) == 0 && !prestackState.rendering && !prestackState.resizeActive && !prestackState.resizePending && !prestackState.suppressPageRender {
 		startPrestackRender()
 	}
 	invalidatePrestackScene()
@@ -738,6 +767,7 @@ func layoutPrestackControls() {
 	place(u.mappingAuto, 18, 311, 104, 27, mapPage)
 	place(u.mappingApply, 130, 311, 205, 27, mapPage)
 	place(u.mappingText, 18, 349, w-36, h-389, mapPage)
+	place(u.qcExport, 18, 78, 130, 27, prestackState.page == 4)
 }
 func prestackSceneRect() RECT {
 	r := clientRect(prestackHwnd)
@@ -767,6 +797,30 @@ func invalidatePrestackScene() {
 	pInvalidateRect.Call(prestackHwnd, uintptr(unsafe.Pointer(&r)), 0)
 }
 func setPrestackStatus(s string) { setText(prestackUI.status, s) }
+
+func currentPrestackAsyncToken() prestackAsyncToken {
+	r := prestackSceneRect()
+	return prestackAsyncToken{owner: prestackHwnd, ownerToken: prestackState.ownerToken,
+		datasetGeneration: prestackState.datasetGeneration, selectionGeneration: prestackState.selectionGeneration,
+		workspaceGeneration: prestackState.workspaceGeneration, sizeGeneration: prestackState.resizeGeneration,
+		sceneWidth: int(r.Right - r.Left), sceneHeight: int(r.Bottom - r.Top), page: prestackState.page}
+}
+
+func prestackAsyncSourceMatches(a, b prestackAsyncToken) bool {
+	return a.owner != 0 && a.owner == b.owner && a.ownerToken == b.ownerToken &&
+		a.datasetGeneration == b.datasetGeneration && a.workspaceGeneration == b.workspaceGeneration
+}
+
+func prestackAsyncRenderMatches(a, b prestackAsyncToken) bool {
+	return prestackAsyncSourceMatches(a, b) && a.selectionGeneration == b.selectionGeneration &&
+		a.sizeGeneration == b.sizeGeneration &&
+		a.page == 0 && b.page == 0
+}
+
+func prestackValidRenderBuffers(r *prestackRenderResult) bool {
+	return r != nil && r.width > 0 && r.height > 0 && r.width <= 1536 && r.height <= 1536 &&
+		len(r.indices) == r.width*r.height && len(r.bgra) == r.width*r.height*4
+}
 
 // Rebuilding a gather may fill thousands of keys, so queue that work after
 // the native popup's accepted selection/close notification.
@@ -897,6 +951,8 @@ func cancelPrestackJobs() {
 	prestackState.renderGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.loading, prestackState.rendering = false, false
 	prestackDeliveryMu.Lock()
+	prestackDeliveryIndexGeneration = prestackState.indexGeneration
+	prestackDeliveryRenderGeneration = prestackState.renderGeneration
 	prestackPendingIndex = nil
 	prestackPendingRender = nil
 	prestackDeliveryMu.Unlock()
@@ -910,19 +966,23 @@ func startPrestackIndex(detect bool) {
 	prestackState.indexCancel = cancel
 	gen := atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.indexGeneration = gen
+	prestackState.selectionGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	token := currentPrestackAsyncToken()
+	prestackDeliveryMu.Lock()
+	prestackDeliveryIndexGeneration = gen
+	prestackDeliveryMu.Unlock()
 	prestackState.loading = true
 	prestackState.needsIndex = false
 	data, mapping, owner := prestackState.dataset, prestackState.mapping, prestackHwnd
 	prestackState.index = nil
-	prestackState.indices = nil
-	prestackState.bgra = nil
+	clearPrestackImage()
 	prestackState.gather = prestackcore.GatherResult{}
 	setPrestackStatus("正在检查道头映射；仅扫描道头，不读取全文件振幅…")
 	setPrestackProgress(false, "扫描道头")
 	pSendMessageW.Call(prestackUI.progress, PBM_SETPOS, 0, 0)
 	invalidatePrestackScene()
 	go func() {
-		result := &prestackIndexResult{generation: gen}
+		result := &prestackIndexResult{generation: gen, token: token}
 		reader, err := data.OpenReader()
 		if err != nil {
 			result.err = err
@@ -944,10 +1004,12 @@ func startPrestackIndex(detect bool) {
 					if p.Total > 0 {
 						pct = p.Done * 100 / p.Total
 					}
-					atomic.StoreInt64(&prestackProgress, pct)
-					if ctx.Err() == nil {
+					prestackDeliveryMu.Lock()
+					if prestackDeliveryHwnd == owner && prestackDeliveryOwnerToken == token.ownerToken && prestackDeliveryIndexGeneration == gen && ctx.Err() == nil {
+						atomic.StoreInt64(&prestackProgress, pct)
 						pPostMessageW.Call(owner, WM_PRESTACK_PROGRESS, uintptr(gen), 0)
 					}
+					prestackDeliveryMu.Unlock()
 				})
 			}
 			result.err = err
@@ -957,7 +1019,7 @@ func startPrestackIndex(detect bool) {
 		}
 		prestackDeliveryMu.Lock()
 		defer prestackDeliveryMu.Unlock()
-		if prestackDeliveryHwnd != owner || ctx.Err() != nil {
+		if prestackDeliveryHwnd != owner || prestackDeliveryOwnerToken != token.ownerToken || prestackDeliveryIndexGeneration != gen || ctx.Err() != nil {
 			return
 		}
 		prestackPendingIndex = result
@@ -976,10 +1038,14 @@ func receivePrestackIndex(gen int64) {
 		r = nil
 	}
 	prestackDeliveryMu.Unlock()
-	if r == nil || gen != prestackState.indexGeneration {
+	if r == nil || gen != prestackState.indexGeneration || !prestackAsyncSourceMatches(r.token, currentPrestackAsyncToken()) {
 		return
 	}
 	prestackState.loading = false
+	if prestackState.indexCancel != nil {
+		prestackState.indexCancel()
+		prestackState.indexCancel = nil
+	}
 	if r.err != nil {
 		setPrestackProgress(true, "加载失败")
 		setPrestackStatus("叠前索引失败：" + r.err.Error())
@@ -1040,6 +1106,8 @@ func selectPrestackGatherType(kind prestackcore.GatherType) {
 	if prestackState.index == nil {
 		return
 	}
+	prestackClearLink()
+	invalidatePrestackRender()
 	if kind == prestackcore.GatherRaw {
 		prestackState.selection.Type = kind
 		prestackState.selection.Sort = prestackcore.SortPhysical
@@ -1069,13 +1137,9 @@ func selectPrestackGatherType(kind prestackcore.GatherType) {
 	layoutPrestackControls()
 	pSendMessageW.Call(prestackUI.key, CB_RESETCONTENT, 0, 0)
 	configurePrestackKeyCombo()
-	best, bestFold, preferred := 0, -1, -1
+	best, preferred := 0, -1
 	for i, k := range prestackState.keys {
 		pSendMessageW.Call(prestackUI.key, CB_ADDSTRING, 0, uintptr(unsafe.Pointer(u16(k.String()))))
-		g, e := prestackState.index.Gather(prestackcore.GatherSelection{Type: kind, Key: k, OffsetBinSize: prestackState.offsetBinSize})
-		if e == nil && len(g.TraceIndices) > bestFold {
-			best, bestFold = i, len(g.TraceIndices)
-		}
 		if kind == prestackcore.GatherOffset && previousType == kind && previousKey.OffsetBin && k.OffsetBin &&
 			math.Abs(k.OffsetCenter-previousKey.OffsetCenter) <= math.Max(1e-9, math.Abs(k.OffsetCenter)*1e-12) {
 			preferred = i
@@ -1136,6 +1200,7 @@ func invalidatePrestackRender() {
 		prestackState.renderCancel = nil
 	}
 	prestackState.renderGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.selectionGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.rendering = false
 	prestackState.indices = nil
 	prestackState.bgra = nil
@@ -1157,7 +1222,9 @@ func openPrestackGather(kind prestackcore.GatherType, key prestackcore.GatherKey
 	invalidatePrestackRender()
 	prestackState.selection.Type = kind
 	prestackState.selection.OffsetBinSize = prestackState.offsetBinSize
+	prestackState.suppressPageRender = true
 	setPrestackPage(0)
+	prestackState.suppressPageRender = false
 	// Keep the visible gather-type control in sync with the exact target. This
 	// matters when a Bin is opened from Geometry while the user previously had
 	// Shot, Receiver, or Common Offset selected.
@@ -1190,6 +1257,8 @@ func selectPrestackGather(index int) {
 	if prestackState.index == nil || len(prestackState.keys) == 0 {
 		return
 	}
+	prestackClearLink()
+	invalidatePrestackRender()
 	if prestackState.selection.Type == prestackcore.GatherRaw {
 		applyPrestackRawRange()
 		return
@@ -1285,9 +1354,10 @@ func clearPrestackImage() {
 // generation.  WM_SIZE can arrive many times per drag; doing work for each
 // message both starves the UI and allows an old-size result to win the race.
 func schedulePrestackResizeRender(owner uintptr, generation int64) {
+	ownerToken := prestackState.ownerToken
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		if owner == 0 || prestackHwnd != owner {
+		if owner == 0 || prestackHwnd != owner || prestackOwnerToken != ownerToken || prestackState.ownerToken != ownerToken {
 			return
 		}
 		pPostMessageW.Call(owner, WM_PRESTACK_RESIZE_FLUSH, uintptr(generation), 0)
@@ -1311,7 +1381,13 @@ func startPrestackRender() {
 	ctx, cancel := context.WithCancel(context.Background())
 	prestackState.renderCancel = cancel
 	gen := atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.selectionGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.renderGeneration = gen
+	token := currentPrestackAsyncToken()
+	prestackDeliveryMu.Lock()
+	prestackDeliveryRenderGeneration = gen
+	prestackPendingRender = nil
+	prestackDeliveryMu.Unlock()
 	prestackState.rendering = true
 	setPrestackProgress(false, "读取道集")
 	// Keep the last complete frame until the replacement is ready.  This is
@@ -1354,7 +1430,7 @@ func startPrestackRender() {
 		if ctx.Err() != nil {
 			return
 		}
-		result := &prestackRenderResult{generation: gen, workspaceGeneration: workspaceGeneration, width: w, height: h}
+		result := &prestackRenderResult{generation: gen, workspaceGeneration: workspaceGeneration, width: w, height: h, token: token, palette: palette}
 		reader, err := data.OpenReader()
 		if err == nil {
 			result.indices, result.stats, err = reader.RenderTraceIndices(traces, options)
@@ -1369,7 +1445,7 @@ func startPrestackRender() {
 		}
 		prestackDeliveryMu.Lock()
 		defer prestackDeliveryMu.Unlock()
-		if prestackDeliveryHwnd != owner || ctx.Err() != nil {
+		if prestackDeliveryHwnd != owner || prestackDeliveryOwnerToken != token.ownerToken || prestackDeliveryRenderGeneration != gen || ctx.Err() != nil {
 			return
 		}
 		prestackPendingRender = result
@@ -1388,7 +1464,7 @@ func receivePrestackRender(gen int64) {
 		r = nil
 	}
 	prestackDeliveryMu.Unlock()
-	if r == nil || gen != prestackState.renderGeneration || r.workspaceGeneration != prestackState.workspaceGeneration {
+	if r == nil || gen != prestackState.renderGeneration || r.workspaceGeneration != prestackState.workspaceGeneration || !prestackAsyncRenderMatches(r.token, currentPrestackAsyncToken()) || !prestackValidRenderBuffers(r) {
 		return
 	}
 	prestackState.rendering = false
@@ -1397,7 +1473,11 @@ func receivePrestackRender(gen int64) {
 		setPrestackStatus("道集显示失败：" + r.err.Error())
 		return
 	}
-	prestackState.indices, prestackState.bgra = r.indices, r.bgra
+	prestackState.indices = r.indices
+	// The worker's palette is only a convenience for stale-result diagnostics;
+	// recolour with the current palette at the exchange point so an E/Shift+E
+	// change cannot be overwritten by an older render completion.
+	prestackState.bgra = crookedPaletteBGRA(r.indices, prestackState.palette)
 	prestackState.imageWidth, prestackState.imageHeight = r.width, r.height
 	prestackState.stats = r.stats
 	pSendMessageW.Call(prestackUI.progress, PBM_SETPOS, 100, 0)
@@ -1522,6 +1602,20 @@ func prestackInspectTrace(x, y int) {
 	showTraceAnalysisSelection(traceAnalysisSelection{Context: context, Targets: []traceAnalysisTarget{{Role: "A", Path: prestackState.dataset.Path, Trace: trace, SampleStart: prestackState.sampleFirst, SampleEnd: prestackState.sampleLast, MarkerSample: sample, Inline: r.Inline, Crossline: r.Crossline, HasGeometry: prestackState.index.UsesGrid}}})
 }
 
+func prestackInspectPhysicalTrace(trace int64, x, y int) {
+	if prestackState.index == nil || trace < 0 || trace >= int64(len(prestackState.index.Records)) {
+		return
+	}
+	r := prestackState.index.Records[trace]
+	scene := prestackSceneRect()
+	sample := prestackState.sampleFirst
+	if y >= int(scene.Top) && y < int(scene.Bottom) {
+		sample = prestackState.sampleFirst + int(math.Round(float64(y-int(scene.Top))/float64(maxInt(1, int(scene.Bottom-scene.Top)))*float64(prestackState.sampleLast-prestackState.sampleFirst)))
+	}
+	context := fmt.Sprintf("叠前 Source/Receiver | physical trace %d | Shot %d | Receiver %d | CDP %d | Header Offset %.5g | Computed Offset %.5g | Azimuth %.3f | Source (%.6g,%.6g) Receiver (%.6g,%.6g) Midpoint (%.6g,%.6g)", trace+1, r.SourceID, r.ReceiverID, r.CDP, r.HeaderOffset, r.ComputedOffset, r.Azimuth, r.SourceX, r.SourceY, r.ReceiverX, r.ReceiverY, r.MidpointX, r.MidpointY)
+	showTraceAnalysisSelection(traceAnalysisSelection{Context: context, Targets: []traceAnalysisTarget{{Role: "A", Path: prestackState.dataset.Path, Trace: trace, SampleStart: prestackState.sampleFirst, SampleEnd: prestackState.sampleLast, MarkerSample: sample, Inline: r.Inline, Crossline: r.Crossline, HasGeometry: prestackState.index.UsesGrid}}})
+}
+
 func prestackHoverGather(x, y int) {
 	if prestackState.index == nil || len(prestackState.gather.TraceIndices) == 0 {
 		return
@@ -1564,6 +1658,8 @@ func paintPrestack(hdc uintptr) {
 		paintPrestackGeometry(mem)
 	case 3:
 		drawAxisText(mem, "叠前 A/B 对比将在后续版本提供。\n本模块只读浏览，不进行 NMO、叠加、插值或写回 SEG-Y。", 40, 125, w-40, h-70, DT_LEFT|DT_WORDBREAK)
+	case 4:
+		paintPrestackQC(mem)
 	}
 	// The destination DC retains WM_PAINT's update and child-window clipping;
 	// drawing never repaints toolbar controls or uses their pixels as overlays.
@@ -1753,11 +1849,55 @@ func paintPrestackGeometry(hdc uintptr) {
 			point(b.X, b.Y, 0x000000FF, 5)
 		}
 	}
+	// Source/Receiver relationship is a dynamic overlay. It is deliberately
+	// drawn after the static points and clipped to the Geometry scene so it
+	// never invalidates or paints over toolbar/status controls.
+	if prestackState.linkGeneration == prestackState.workspaceGeneration && prestackState.linkIndex >= 0 &&
+		(prestackState.linkKind == prestackcore.GatherShot || prestackState.linkKind == prestackcore.GatherReceiver) {
+		points := idx.AcquisitionPoints(prestackState.linkKind)
+		if prestackState.linkIndex < len(points) {
+			if assoc, ok := idx.AcquisitionAssociation(prestackState.linkKind, points[prestackState.linkIndex].Key); ok {
+				otherKind := prestackcore.GatherReceiver
+				if prestackState.linkKind == prestackcore.GatherReceiver {
+					otherKind = prestackcore.GatherShot
+				}
+				other := idx.AcquisitionPoints(otherKind)
+				pen, _, _ := pCreatePen.Call(PS_SOLID, 1, 0x00F0A020)
+				oldPen, _, _ := pSelectObject.Call(hdc, pen)
+				if prestackState.linkIndex < len(points) {
+					p := points[prestackState.linkIndex]
+					px, py := prestackMapPixel(p.X, p.Y)
+					for _, oi := range assoc.CounterpartIndices {
+						if oi < 0 || oi >= len(other) {
+							continue
+						}
+						if !p.HasCoordinates || !other[oi].HasCoordinates {
+							continue
+						}
+						ox, oy := prestackMapPixel(other[oi].X, other[oi].Y)
+						pMoveToEx.Call(hdc, uintptr(px), uintptr(py), 0)
+						pLineTo.Call(hdc, uintptr(ox), uintptr(oy))
+					}
+				}
+				pSelectObject.Call(hdc, oldPen)
+				pDeleteObject.Call(pen)
+				// Selected and counterpart points use distinct sizes/colors.
+				if prestackState.linkIndex < len(points) && points[prestackState.linkIndex].HasCoordinates {
+					point(points[prestackState.linkIndex].X, points[prestackState.linkIndex].Y, 0x000000FF, 5)
+				}
+				for _, oi := range assoc.CounterpartIndices {
+					if oi >= 0 && oi < len(other) && other[oi].HasCoordinates {
+						point(other[oi].X, other[oi].Y, 0x0000A5FF, 3)
+					}
+				}
+			}
+		}
+	}
 	if prestackState.dragging && !prestackState.panning {
 		drawCrookedZoomRectangle(hdc, prestackState.dragX, prestackState.dragY, prestackState.dragCurrentX, prestackState.dragCurrentY)
 	}
 	pRestoreDC.Call(hdc, saved)
-	drawAxisText(hdc, fmt.Sprintf("X %.6g..%.6g   Y %.6g..%.6g | %d traces / %d bins | 左拖放大，右拖平移，滚轮缩放，双击 Bin 打开 CMP", idx.Bounds.XMin, idx.Bounds.XMax, idx.Bounds.YMin, idx.Bounds.YMax, len(idx.Records), len(idx.Bins)), int(r.Left), int(r.Bottom)+8, int(r.Right), int(r.Bottom)+32, DT_LEFT|DT_SINGLELINE)
+	drawAxisText(hdc, fmt.Sprintf("X %.6g..%.6g   Y %.6g..%.6g | %d traces / %d bins | 左拖放大，右拖平移，滚轮缩放，双击 Bin/Source/Receiver 打开道集", idx.Bounds.XMin, idx.Bounds.XMax, idx.Bounds.YMin, idx.Bounds.YMax, len(idx.Records), len(idx.Bins)), int(r.Left), int(r.Bottom)+8, int(r.Right), int(r.Bottom)+32, DT_LEFT|DT_SINGLELINE)
 }
 func prestackHitBin(x, y int) int {
 	if prestackState.index == nil {
@@ -1775,6 +1915,67 @@ func prestackHitBin(x, y int) int {
 		}
 	}
 	return best
+}
+
+func prestackHitAcquisition(x, y int) (prestackcore.GatherType, prestackcore.AcquisitionPick, bool) {
+	if prestackState.index == nil || !prestackPointInside(x, y) {
+		return prestackcore.GatherCMP, prestackcore.AcquisitionPick{}, false
+	}
+	// Pick in screen space so zoom/pan and non-square client areas retain the
+	// same hit tolerance as the drawn points.
+	b := prestackState.mapBounds
+	r := prestackSceneRect()
+	dx, dy := b.XMax-b.XMin, b.YMax-b.YMin
+	if dx <= 0 {
+		dx = 1
+	}
+	if dy <= 0 {
+		dy = 1
+	}
+	scale := math.Min(float64(r.Right-r.Left)/dx, float64(r.Bottom-r.Top)/dy) * .94
+	trf := prestackcore.AcquisitionScreenTransform{OriginX: float64(r.Left+r.Right)/2 - (b.XMin+b.XMax)/2*scale, OriginY: float64(r.Top+r.Bottom)/2 + (b.YMin+b.YMax)/2*scale, ScaleX: scale, ScaleY: -scale}
+	bestKind := prestackcore.GatherCMP
+	var best prestackcore.AcquisitionPick
+	found := false
+	for _, kind := range []prestackcore.GatherType{prestackcore.GatherShot, prestackcore.GatherReceiver} {
+		if kind == prestackcore.GatherShot && !prestackState.mapLayers[0] || kind == prestackcore.GatherReceiver && !prestackState.mapLayers[1] {
+			continue
+		}
+		p, ok := prestackState.index.PickAcquisitionPoint(kind, float64(x), float64(y), trf, 10)
+		if ok && (!found || p.DistancePx < best.DistancePx) {
+			bestKind, best, found = kind, p, true
+		}
+	}
+	return bestKind, best, found
+}
+
+func prestackSetLink(kind prestackcore.GatherType, point int) {
+	prestackState.linkKind, prestackState.linkIndex = kind, point
+	prestackState.linkGeneration = prestackState.workspaceGeneration
+	if prestackState.index == nil {
+		return
+	}
+	points := prestackState.index.AcquisitionPoints(kind)
+	if point < 0 || point >= len(points) {
+		return
+	}
+	p := points[point]
+	other := 0
+	if assoc, ok := prestackState.index.AcquisitionAssociation(kind, p.Key); ok {
+		other = len(assoc.CounterpartIndices)
+	}
+	label := "震源"
+	if kind == prestackcore.GatherReceiver {
+		label = "检波点"
+	}
+	setPrestackStatus(fmt.Sprintf("%s %s | 关联点 %d 个 | 物理道 %d 道 | Offset %s | Azimuth %s", label, p.Key.String(), other, len(p.TraceIndices), prestackRangeText(p.OffsetRange), prestackRangeText(p.AzimuthRange)))
+	invalidatePrestackScene()
+}
+
+func prestackClearLink() {
+	prestackState.linkKind, prestackState.linkIndex = prestackcore.GatherCMP, -1
+	prestackState.linkGeneration = 0
+	invalidatePrestackScene()
 }
 func prestackPointInside(x, y int) bool {
 	r := prestackSceneRect()
@@ -1935,6 +2136,8 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			startPrestackIndex(true)
 		case IDPRESTACK_MAPPING_APPLY:
 			applyPrestackMapping()
+		case IDPRESTACK_QC_EXPORT:
+			exportPrestackQC()
 		case IDPRESTACK_PREV:
 			selectPrestackGather(prestackState.keyIndex - 1)
 		case IDPRESTACK_NEXT:
@@ -2006,14 +2209,14 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			i := id - IDPRESTACK_LAYER_SOURCE
 			v, _, _ := pSendMessageW.Call(prestackUI.layers[i], BM_GETCHECK, 0, 0)
 			prestackState.mapLayers[i] = v == BST_CHECKED
+			prestackClearLink()
 			invalidatePrestackScene()
 		}
 		return 0
 	case WM_KEYDOWN:
 		if wParam == VK_ESCAPE {
-			prestackState.dragging = false
-			pReleaseCapture.Call()
-			invalidatePrestackScene()
+			cancelPrestackPointerDrag(true)
+			prestackClearLink()
 			return 0
 		}
 	case WM_LBUTTONDOWN, WM_RBUTTONDOWN:
@@ -2056,7 +2259,13 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		} else if prestackPointInside(x, y) && time.Since(prestackState.lastHover) > 50*time.Millisecond {
 			prestackState.lastHover = time.Now()
 			if prestackState.page == 1 {
-				if i := prestackHitBin(x, y); i >= 0 {
+				if kind, pick, ok := prestackHitAcquisition(x, y); ok {
+					label := "Source"
+					if kind == prestackcore.GatherReceiver {
+						label = "Receiver"
+					}
+					setPrestackStatus(fmt.Sprintf("%s %s | %d physical traces | Offset %s | Azimuth %s | 单击联动，双击打开道集，Ctrl+单击查看道分析", label, pick.Point.Key.String(), len(pick.Point.TraceIndices), prestackRangeText(pick.Point.OffsetRange), prestackRangeText(pick.Point.AzimuthRange)))
+				} else if i := prestackHitBin(x, y); i >= 0 {
 					b := prestackState.index.Bins[i]
 					setPrestackStatus(fmt.Sprintf("Bin %s | XY %.6g, %.6g | Fold %d | Offset %.5g..%.5g | Azimuth %.3g..%.3g", b.Key.String(), b.X, b.Y, b.Fold, b.OffsetRange.Min, b.OffsetRange.Max, b.AzimuthRange.Min, b.AzimuthRange.Max))
 				}
@@ -2083,7 +2292,17 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				c, d := prestackMapWorld(x, y)
 				prestackState.mapBounds = prestackcore.XYBounds{XMin: math.Min(a, c), XMax: math.Max(a, c), YMin: math.Min(b, d), YMax: math.Max(b, d), Valid: true}
 			}
+			if !prestackState.panning && dx < 5 && dy < 5 {
+				if kind, pick, ok := prestackHitAcquisition(x, y); ok {
+					if prestackState.ctrlClick && len(pick.Point.TraceIndices) > 0 {
+						prestackInspectPhysicalTrace(pick.Point.TraceIndices[0], x, y)
+					} else if !prestackState.ctrlClick {
+						prestackSetLink(kind, pick.PointIndex)
+					}
+				}
+			}
 			invalidatePrestackScene()
+			prestackState.ctrlClick = false
 			return 0
 		}
 		if prestackState.panning {
@@ -2121,12 +2340,13 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		prestackState.dragging = false
 		pReleaseCapture.Call()
 		if prestackState.page == 1 {
-			if i := prestackHitBin(x, y); i >= 0 {
+			if kind, pick, ok := prestackHitAcquisition(x, y); ok {
+				if kind == prestackcore.GatherShot || kind == prestackcore.GatherReceiver {
+					openPrestackGather(kind, pick.Point.Key)
+				}
+			} else if i := prestackHitBin(x, y); i >= 0 {
 				key := prestackState.index.Bins[i].Key
 				openPrestackGather(prestackcore.GatherCMP, key)
-			} else if prestackState.index != nil {
-				prestackState.mapBounds = prestackState.index.Bounds
-				invalidatePrestackScene()
 			}
 		} else if prestackState.page == 0 {
 			resetPrestackSection()
@@ -2156,11 +2376,15 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		cancelPrestackJobs()
 		prestackDeliveryMu.Lock()
 		prestackDeliveryHwnd = 0
+		prestackDeliveryOwnerToken = 0
+		prestackDeliveryIndexGeneration = 0
+		prestackDeliveryRenderGeneration = 0
 		prestackPendingIndex = nil
 		prestackPendingRender = nil
 		prestackDeliveryMu.Unlock()
 		revokeOleSegyDropTarget(h)
 		prestackHwnd = 0
+		prestackOwnerToken = 0
 		prestackUI = prestackControls{}
 		prestackState = prestackSession{}
 		if application != nil && !prestackManagerClosing {

@@ -233,15 +233,15 @@ func TestPrestackMVPReleaseIdentity(t *testing.T) {
 	if APP_NAME != "SeisForge Studio" {
 		t.Fatalf("unexpected application name: %q", APP_NAME)
 	}
-	if APP_VERSION != "1.10.2" {
+	if APP_VERSION != "1.10.3" {
 		t.Fatalf("unexpected application version: %q", APP_VERSION)
 	}
 	build, err := os.ReadFile(filepath.Join("..", "..", "build_windows_release.ps1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(build), `SeisForgeStudio_v1.10.2_prestack_raw_order_x64.exe`) || !strings.Contains(string(build), `-H=windowsgui`) {
-		t.Fatal("release script does not target the v1.10.2 Windows GUI artifact")
+	if !strings.Contains(string(build), `SeisForgeStudio_v1.10.3_prestack_qc_x64.exe`) || !strings.Contains(string(build), `-H=windowsgui`) {
+		t.Fatal("release script does not target the v1.10.3 Windows GUI artifact")
 	}
 }
 
