@@ -70,6 +70,8 @@ const (
 	// Post selection work so key-list rebuilding/render planning starts after
 	// the native control has completed its notification transaction.
 	WM_PRESTACK_COMBO_COMMIT = WM_USER + 614
+	WM_TIMER                 = 0x0113
+	prestackCtrlClickTimer   = 1
 	// Mouse capture belongs to the scene only while a drag is active.  A
 	// native combo box takes capture while its drop list is open; without
 	// clearing our scene state when that happens, subsequent clicks are still
@@ -144,6 +146,11 @@ type prestackSession struct {
 	linkKind                                             prestackcore.GatherType
 	linkIndex                                            int
 	linkGeneration                                       uint64
+	selectedBinIndex                                     int
+	pendingCtrlTrace                                     int64
+	pendingCtrlX, pendingCtrlY                           int
+	pendingCtrlGeneration                                uint64
+	pendingCtrlValid                                     bool
 }
 
 // Workers capture this identity on the UI thread and never read mutable
@@ -211,6 +218,8 @@ func (*prestackWorkspaceAdapter) Open(r workspacecore.OpenRequest) error {
 		datasetGeneration: atomic.AddInt64(&prestackGeneration, 1), ownerToken: prestackOwnerToken,
 		workspaceGeneration: r.Generation, sampleLast: r.Dataset.Metadata.SamplesPerTrace - 1,
 		mapLayers: [5]bool{true, true, true, true, true}}
+	prestackState.selectedBinIndex = -1
+	prestackState.pendingCtrlTrace = -1
 	prestackState.sampleFirst, prestackState.sampleLast = int(r.EffectiveSampleRange().Start), int(r.EffectiveSampleRange().End)
 	setText(prestackUI.path, r.Dataset.Path)
 	populatePrestackMapping()
@@ -479,6 +488,19 @@ func prestackGatherKindLabel(kind prestackcore.GatherType) string {
 		return "原始叠前道序"
 	default:
 		return "Gather"
+	}
+}
+
+func prestackSortLabel(mode prestackcore.SortMode) string {
+	switch mode {
+	case prestackcore.SortOffset:
+		return "Offset"
+	case prestackcore.SortAbsoluteOffset:
+		return "|Offset|"
+	case prestackcore.SortAzimuth:
+		return "Azimuth"
+	default:
+		return "原始道序"
 	}
 }
 
@@ -789,6 +811,13 @@ func maxInt32(a, b int32) int32 {
 }
 func invalidatePrestackScene() {
 	if prestackHwnd == 0 {
+		return
+	}
+	if prestackState.page == 4 {
+		// QC charts and the bottom progress/status controls can move outside
+		// the seismic scene after a resize.  Invalidate the whole client so the
+		// off-screen white background removes pixels from the old geometry.
+		pInvalidateRect.Call(prestackHwnd, 0, 0)
 		return
 	}
 	r := clientRect(prestackHwnd)
@@ -1502,6 +1531,8 @@ func receivePrestackRender(gen int64) {
 	}
 	if prestackState.selection.Type == prestackcore.GatherRaw {
 		setPrestackStatus(fmt.Sprintf("完成 | 原始叠前道序 | 道 %d–%d（%d 道） | 样点 %d–%d | %s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", prestackState.gather.RawTraceStart+1, prestackState.gather.RawTraceEnd, len(prestackState.gather.TraceIndices), prestackState.sampleFirst+1, prestackState.sampleLast+1, offsetLabel, gainHint))
+	} else if prestackState.selection.Key.All {
+		setPrestackStatus(fmt.Sprintf("完成 | %s 全部范围（全文件） | %d 道 | 排序 %s | %s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", kindLabel, len(prestackState.gather.TraceIndices), prestackSortLabel(prestackState.selection.Sort), offsetLabel, gainHint))
 	} else if prestackState.selection.Type == prestackcore.GatherOffset {
 		setPrestackStatus(fmt.Sprintf("完成 | %s %s | 实际 %s | %d 道 | Fold %d%s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", kindLabel, prestackState.selection.Key.String(), offsetLabel, len(prestackState.gather.TraceIndices), len(prestackState.gather.TraceIndices), keyPosition, gainHint))
 	} else {
@@ -1762,7 +1793,11 @@ func paintPrestackGather(hdc uintptr) {
 	if prestackState.gather.OffsetRange.Valid {
 		offsetText = fmt.Sprintf("Offset %.6g..%.6g", prestackState.gather.OffsetRange.Min, prestackState.gather.OffsetRange.Max)
 	}
-	title := fmt.Sprintf("%s — %s — %d physical traces — %s", filepath.Base(prestackState.dataset.Path), prestackState.selection.Key.String(), len(prestackState.gather.TraceIndices), offsetText)
+	titleKey := prestackState.selection.Key.String()
+	if prestackState.selection.Key.All {
+		titleKey = fmt.Sprintf("%s 全部范围（全文件，排序 %s）", prestackGatherKindLabel(prestackState.selection.Type), prestackSortLabel(prestackState.selection.Sort))
+	}
+	title := fmt.Sprintf("%s — %s — %d physical traces — %s", filepath.Base(prestackState.dataset.Path), titleKey, len(prestackState.gather.TraceIndices), offsetText)
 	if prestackState.selection.Type == prestackcore.GatherRaw {
 		title = fmt.Sprintf("%s — 原始叠前道序 %d–%d — %d physical traces — %s", filepath.Base(prestackState.dataset.Path), prestackState.gather.RawTraceStart+1, prestackState.gather.RawTraceEnd, len(prestackState.gather.TraceIndices), offsetText)
 	}
@@ -1845,7 +1880,7 @@ func paintPrestackGeometry(hdc uintptr) {
 		} else if prestackState.mapLayers[3] {
 			point(b.X, b.Y, 0x008B7055, 2)
 		}
-		if prestackState.selection.Type == prestackcore.GatherCMP && b.Key == prestackState.selection.Key {
+		if (prestackState.selection.Type == prestackcore.GatherCMP && b.Key == prestackState.selection.Key) || prestackState.selectedBinIndex == i {
 			point(b.X, b.Y, 0x000000FF, 5)
 		}
 	}
@@ -1950,7 +1985,12 @@ func prestackHitAcquisition(x, y int) (prestackcore.GatherType, prestackcore.Acq
 }
 
 func prestackSetLink(kind prestackcore.GatherType, point int) {
+	if prestackState.linkKind == kind && prestackState.linkIndex == point {
+		prestackClearLink()
+		return
+	}
 	prestackState.linkKind, prestackState.linkIndex = kind, point
+	prestackState.selectedBinIndex = -1
 	prestackState.linkGeneration = prestackState.workspaceGeneration
 	if prestackState.index == nil {
 		return
@@ -1972,10 +2012,64 @@ func prestackSetLink(kind prestackcore.GatherType, point int) {
 	invalidatePrestackScene()
 }
 
+func prestackSetBinSelection(index int) {
+	if prestackState.selectedBinIndex == index {
+		prestackClearLink()
+		return
+	}
+	prestackState.linkKind, prestackState.linkIndex = prestackcore.GatherCMP, -1
+	prestackState.selectedBinIndex = index
+	prestackState.linkGeneration = prestackState.workspaceGeneration
+	if prestackState.index != nil && index >= 0 && index < len(prestackState.index.Bins) {
+		b := prestackState.index.Bins[index]
+		setPrestackStatus(fmt.Sprintf("Bin %s | Fold %d | 单击选中，再次单击取消；Ctrl+双击打开 CMP 道集", b.Key.String(), b.Fold))
+	}
+	invalidatePrestackScene()
+}
+
 func prestackClearLink() {
+	clearPrestackPendingCtrlClick()
 	prestackState.linkKind, prestackState.linkIndex = prestackcore.GatherCMP, -1
 	prestackState.linkGeneration = 0
+	prestackState.selectedBinIndex = -1
 	invalidatePrestackScene()
+}
+
+func clearPrestackPendingCtrlClick() {
+	if prestackHwnd != 0 {
+		pKillTimer.Call(prestackHwnd, prestackCtrlClickTimer)
+	}
+	prestackState.pendingCtrlValid = false
+	prestackState.pendingCtrlTrace = -1
+	prestackState.pendingCtrlGeneration = 0
+}
+
+func queuePrestackCtrlTrace(trace int64, x, y int) {
+	if prestackHwnd == 0 || prestackState.index == nil {
+		return
+	}
+	clearPrestackPendingCtrlClick()
+	prestackState.pendingCtrlTrace = trace
+	prestackState.pendingCtrlX, prestackState.pendingCtrlY = x, y
+	prestackState.pendingCtrlGeneration = prestackState.workspaceGeneration
+	prestackState.pendingCtrlValid = true
+	delay, _, _ := pGetDoubleClickTime.Call()
+	if delay == 0 {
+		delay = 500
+	}
+	pSetTimer.Call(prestackHwnd, prestackCtrlClickTimer, delay, 0)
+}
+
+func commitPrestackPendingCtrlClick() {
+	if !prestackState.pendingCtrlValid {
+		return
+	}
+	trace, x, y := prestackState.pendingCtrlTrace, prestackState.pendingCtrlX, prestackState.pendingCtrlY
+	valid := prestackState.pendingCtrlGeneration == prestackState.workspaceGeneration
+	clearPrestackPendingCtrlClick()
+	if valid {
+		prestackInspectPhysicalTrace(trace, x, y)
+	}
 }
 func prestackPointInside(x, y int) bool {
 	r := prestackSceneRect()
@@ -2295,9 +2389,20 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			if !prestackState.panning && dx < 5 && dy < 5 {
 				if kind, pick, ok := prestackHitAcquisition(x, y); ok {
 					if prestackState.ctrlClick && len(pick.Point.TraceIndices) > 0 {
-						prestackInspectPhysicalTrace(pick.Point.TraceIndices[0], x, y)
+						// Delay Ctrl+single until the double-click window expires;
+						// Windows delivers the first button-up before WM_LBUTTONDBLCLK.
+						queuePrestackCtrlTrace(pick.Point.TraceIndices[0], x, y)
 					} else if !prestackState.ctrlClick {
 						prestackSetLink(kind, pick.PointIndex)
+					}
+				} else if i := prestackHitBin(x, y); i >= 0 {
+					if prestackState.ctrlClick && i < len(prestackState.index.Bins) {
+						g, err := prestackState.index.Gather(prestackcore.GatherSelection{Type: prestackcore.GatherCMP, Key: prestackState.index.Bins[i].Key})
+						if err == nil && len(g.TraceIndices) > 0 {
+							queuePrestackCtrlTrace(g.TraceIndices[0], x, y)
+						}
+					} else if !prestackState.ctrlClick {
+						prestackSetBinSelection(i)
 					}
 				}
 			}
@@ -2339,7 +2444,8 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		prestackState.dragging = false
 		pReleaseCapture.Call()
-		if prestackState.page == 1 {
+		if prestackState.page == 1 && (wParam&prestackMKControl) != 0 {
+			clearPrestackPendingCtrlClick()
 			if kind, pick, ok := prestackHitAcquisition(x, y); ok {
 				if kind == prestackcore.GatherShot || kind == prestackcore.GatherReceiver {
 					openPrestackGather(kind, pick.Point.Key)
@@ -2352,6 +2458,11 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			resetPrestackSection()
 		}
 		return 0
+	case WM_TIMER:
+		if wParam == prestackCtrlClickTimer {
+			commitPrestackPendingCtrlClick()
+			return 0
+		}
 	case WM_MOUSEWHEEL:
 		if prestackState.page == 1 && prestackState.mapBounds.Valid {
 			factor := 1.25

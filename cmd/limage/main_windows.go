@@ -57,6 +57,8 @@ var (
 	pSetCursor                = user32.NewProc("SetCursor")
 	pGetCursorPos             = user32.NewProc("GetCursorPos")
 	pGetDoubleClickTime       = user32.NewProc("GetDoubleClickTime")
+	pSetTimer                 = user32.NewProc("SetTimer")
+	pKillTimer                = user32.NewProc("KillTimer")
 	pGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	pGetAncestor              = user32.NewProc("GetAncestor")
 	pScreenToClient           = user32.NewProc("ScreenToClient")
