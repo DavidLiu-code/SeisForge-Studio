@@ -33,6 +33,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: SeisForgeStudio-windows-x64
-          path: SeisForgeStudio_v1.9.15_windows_x64.exe
+          path: SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe
           if-no-files-found: error
           retention-days: 14

@@ -131,6 +131,36 @@ func TestGatherKeyAndMappingValidation(t *testing.T) {
 	}
 }
 
+func TestBuildTablesKeepsConfiguredOriginCoordinates(t *testing.T) {
+	idx := &PrestackIndex{
+		Mapping: DefaultHeaderMapping(),
+		Records: []PrestackTraceRecord{{
+			TraceNumber:  0,
+			SourceID:     1,
+			ReceiverID:   2,
+			CDP:          10,
+			SourceX:      0,
+			SourceY:      0,
+			ReceiverX:    100,
+			ReceiverY:    0,
+			MidpointX:    50,
+			MidpointY:    0,
+			HeaderOffset: 100,
+			HasOffset:    true,
+		}},
+	}
+	if err := idx.buildTables(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r := idx.Records[0]
+	if !r.HasSource || !r.HasReceiver || !r.HasMidpoint {
+		t.Fatalf("configured origin coordinates were treated as missing: %+v", r)
+	}
+	if len(idx.AvailableGathers(GatherShot)) != 1 || len(idx.AvailableGathers(GatherReceiver)) != 1 {
+		t.Fatalf("origin coordinate gather keys missing: shots=%v receivers=%v", idx.AvailableGathers(GatherShot), idx.AvailableGathers(GatherReceiver))
+	}
+}
+
 func TestCommonOffsetGatherConfiguredBins(t *testing.T) {
 	file, err := segy.Open(prestackFixture(t))
 	if err != nil {

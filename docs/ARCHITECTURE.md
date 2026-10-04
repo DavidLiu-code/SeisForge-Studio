@@ -1,4 +1,4 @@
-# SeisForge Studio 1.9.15 架构
+# SeisForge Studio 1.10.3 架构
 
 ## 设计目标
 
@@ -23,8 +23,8 @@ Home / Recent / Drag & Drop / Workspace commands
                     internal/segy
                          |
           Win32 adapters and sessions (cmd/limage)
-            /               |                 \
-       2-D/Compare       Volume3D        Crooked/Pseudo3D
+            /             |                |                 \
+       2-D/Compare   Prestack/QC       Volume3D        Crooked/Pseudo3D
 ```
 
 核心包职责：
@@ -37,6 +37,7 @@ Home / Recent / Drag & Drop / Workspace commands
 | `internal/project` | 多弯线项目、自然排序、导航文件解析和线名匹配 |
 | `internal/workspace` | 工作区注册、原子切换、恢复历史和异步 generation |
 | `internal/segy` | 头解析、样点解码、索引、切片、振幅映射、频谱兼容路径和 SEG-Y 导出 |
+| `internal/prestack` | 叠前道头元数据索引、CMP/Shot/Receiver/Common Offset、Geometry、QC 和只读道集模型 |
 | `internal/pseudo3d` | XY/时间裁剪、幕布模型、相机投影、拾取和 CPU Z-buffer |
 | `internal/pseudocache` | `.ptx` 持久纹理缓存、CRC、原子写入和 LRU 清理 |
 | `internal/pseudoexport` | 伪三维裁剪导出计划、校验、执行和 JSON 清单 |

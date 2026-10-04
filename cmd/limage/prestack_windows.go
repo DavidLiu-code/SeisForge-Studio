@@ -958,41 +958,58 @@ func layoutPrestackControls() {
 			place(c, 0, 0, 1, 1, false)
 		}
 		// First row: gather type, navigation, key, sort and horizontal axis.
+		// At the minimum restored width the optional bin controls must still fit
+		// inside the client.  Use a compact two-row variant instead of allowing
+		// the last controls to spill into the non-client area (which also caused
+		// stale pixels to appear after a resize).
+		compact := w < 1280
+		kindW, prevW, keyW, nextW := 150, 64, 190, 64
+		sortLabelW, sortW, axisW := 42, 124, 110
+		multiLabelW, multiEditW, multiApplyW := 50, 150, 76
+		if compact {
+			kindW, prevW, keyW, nextW = 130, 56, 145, 56
+			sortLabelW, sortW, axisW = 34, 96, 90
+			multiLabelW, multiEditW, multiApplyW = 40, 100, 70
+		}
 		x, y = 10, 76
-		place(u.kind, x, y, 150, 24, g)
-		x += 156
-		place(u.prev, x, y, 64, 25, g)
-		x += 70
-		place(u.key, x, y, 190, 24, g)
-		x += 196
-		place(u.next, x, y, 64, 25, g)
-		x += 70
-		place(u.sortLabel, x, y+2, 42, 22, g)
-		x += 46
-		place(u.sort, x, y, 124, 24, g)
-		x += 130
-		place(u.axis, x, y, 110, 24, g)
-		x += 116
+		place(u.kind, x, y, kindW, 24, g)
+		x += kindW + 6
+		place(u.prev, x, y, prevW, 25, g)
+		x += prevW + 6
+		place(u.key, x, y, keyW, 24, g)
+		x += keyW + 6
+		place(u.next, x, y, nextW, 25, g)
+		x += nextW + 6
+		place(u.sortLabel, x, y+2, sortLabelW, 22, g)
+		x += sortLabelW + 4
+		place(u.sort, x, y, sortW, 24, g)
+		x += sortW + 4
+		place(u.axis, x, y, axisW, 24, g)
+		x += axisW + 4
 		// The multi-bin command stays on the first row so it is available for
 		// every keyed gather without creating a third toolbar row.  Keep a
 		// small gap around the edit so the text (notably "20") never touches a
 		// neighboring border.
-		place(u.multiLabel, x, y+2, 50, 22, g)
-		x += 54
-		place(u.multiEdit, x, y, 150, 24, g)
-		x += 154
-		place(u.multiApply, x, y, 76, 24, g)
-		x += 84
+		place(u.multiLabel, x, y+2, multiLabelW, 22, g)
+		x += multiLabelW + 4
+		place(u.multiEdit, x, y, multiEditW, 24, g)
+		x += multiEditW + 4
+		place(u.multiApply, x, y, multiApplyW, 24, g)
+		x += multiApplyW + 8
 		isCMP := g && prestackState.selection.Type == prestackcore.GatherCMP
 		isOffset := g && prestackState.selection.Type == prestackcore.GatherOffset
-		place(u.cmpBinLabel, x, y+2, 62, 22, isCMP)
-		x += 66
-		place(u.cmpBin, x, y, 68, 24, isCMP)
-		x += 74
-		place(u.cmpBinApply, x, y, 76, 24, isCMP)
-		place(u.offsetBinLabel, x, y+2, 68, 22, isOffset)
-		place(u.offsetBin, x+72, y, 72, 24, isOffset)
-		place(u.offsetBinApply, x+150, y, 74, 24, isOffset)
+		binLabelW, binEditW, binApplyW := 62, 68, 76
+		if compact {
+			binLabelW, binEditW, binApplyW = 52, 58, 68
+		}
+		place(u.cmpBinLabel, x, y+2, binLabelW, 22, isCMP)
+		x += binLabelW + 4
+		place(u.cmpBin, x, y, binEditW, 24, isCMP)
+		x += binEditW + 4
+		place(u.cmpBinApply, x, y, binApplyW, 24, isCMP)
+		place(u.offsetBinLabel, x-binLabelW-binEditW-8, y+2, binLabelW, 22, isOffset)
+		place(u.offsetBin, x-binEditW-4, y, binEditW, 24, isOffset)
+		place(u.offsetBinApply, x, y, binApplyW, 24, isOffset)
 		// Second row: display, reset, headers, palette, gain and AGC.
 		x, y = 10, 107
 		place(u.display, x, y, 112, 24, g)
@@ -1039,15 +1056,11 @@ func layoutPrestackControls() {
 }
 func prestackSceneRect() RECT {
 	r := clientRect(prestackHwnd)
-	top := int32(119)
-	if prestackState.page == 0 {
-		// Gather and raw file-order modes both use exactly two toolbar rows.
-		// Keep the scene anchor stable on narrow windows as well; wrapping the
-		// hidden/key controls used to push this down to a third row and made the
-		// raw mode appear to have a different layout.
-		top = 156
-	}
-	return RECT{Left: 62, Top: top, Right: maxInt32(63, r.Right-24), Bottom: maxInt32(top+1, r.Bottom-62)}
+	// Gather and raw file-order modes both use exactly two toolbar rows. Keep
+	// this in the same pure layout contract used by QC and page painting so a
+	// resize cannot leave an old frame under the footer or toolbar.
+	l := prestackPanelLayoutForSize(int(r.Right), int(r.Bottom), prestackState.page)
+	return prestackLayoutRECT(l.Scene)
 }
 func maxInt32(a, b int32) int32 {
 	if a > b {
@@ -2419,7 +2432,7 @@ func paintPrestack(hdc uintptr) {
 	case 1:
 		paintPrestackGeometry(mem)
 	case 3:
-		content := RECT{Left: 40, Top: 114, Right: int32(maxInt(41, w-40)), Bottom: int32(maxInt(115, h-42))}
+		content := prestackLayoutRECT(prestackPanelLayoutForSize(w, h, prestackState.page).Content)
 		saved, _, _ := pSaveDC.Call(mem)
 		pIntersectClipRect.Call(mem, uintptr(content.Left), uintptr(content.Top), uintptr(content.Right), uintptr(content.Bottom))
 		drawPrestackQCText(mem, "叠前 A/B 对比将在后续版本提供。\n本模块只读浏览，不进行 NMO、叠加、插值或写回 SEG-Y。", content, DT_LEFT|prestackDTTop|DT_WORDBREAK)

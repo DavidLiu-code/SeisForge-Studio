@@ -70,14 +70,8 @@ func measurePrestackQCText(hdc uintptr, text string, width int) int {
 // painted by the parent window, so the chart area must end before those child
 // windows even while the user is resizing the frame.
 func prestackQCContentRect(r RECT) RECT {
-	content := RECT{Left: 20, Top: 114, Right: r.Right - 20, Bottom: r.Bottom - 42}
-	if content.Right < content.Left+1 {
-		content.Right = content.Left + 1
-	}
-	if content.Bottom < content.Top+1 {
-		content.Bottom = content.Top + 1
-	}
-	return content
+	l := prestackPanelLayoutForSize(int(r.Right), int(r.Bottom), 4)
+	return prestackLayoutRECT(l.Content)
 }
 
 func prestackRangeText(r prestackcore.ValueRange) string {
