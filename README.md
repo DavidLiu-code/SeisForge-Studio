@@ -18,7 +18,7 @@ SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与�
 | 三维数据体 | Inline、Crossline、Time 三正交切片；共享振幅归一化；CPU 深度缓冲；相机、FOV、轴倍率；A/B/差值和三维范围导出 |
 | 二维叠后弯线 | 单文件、多选文件或文件夹项目；XY Geometry 总图；Trace/CDP/Distance 横轴；项目导航与道头坐标识别 |
 | 伪三维幕布 | 多弯线按真实 XY-Time 位置竖立；测线筛选；空间 AOI 与时间窗裁剪；二维联动；范围导出；持久纹理缓存 |
-| 叠前工作区 | CMP、Shot、Receiver、Common Offset 和原始道序浏览；Geometry、QC、单道分析和只读道集导出 |
+| 叠前工作区 | CMP、Shot、Receiver、Common Offset 和原始道序浏览；Geometry、QC、只读 A/B Compare 基础、单道分析和道集导出 |
 | SEG-Y 分析 | ASCII/EBCDIC 文本卷头、二进制卷头、240 字节道头、原始 Hex、单道波形、统计和频谱 |
 
 所有数据读取和渲染均在本机完成。程序按需读取道和样点窗口，不要求把完整地震体复制到内存。

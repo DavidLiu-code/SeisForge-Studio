@@ -1,1 +1,1 @@
-a2c907215e6faa50e5ba63ab263716eb4d60325cade56ad08a69e35e5ce59249  SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe
+b41314ecb0afa54608f06a659b74edc0d7992051083a2e937329808e5c140f9c  SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe

@@ -3,9 +3,13 @@
 package main
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf16"
@@ -229,4 +233,77 @@ func exportPrestackQC() {
 		return
 	}
 	setPrestackStatus("QC 报告已导出：" + path)
+}
+
+type prestackCompareReport struct {
+	Version    string                               `json:"version"`
+	APath      string                               `json:"a_path"`
+	BPath      string                               `json:"b_path"`
+	Selection  string                               `json:"selection"`
+	Result     prestackcore.CompareMatchResult      `json:"result"`
+	SampleAxis prestackcore.SampleAxisCompatibility `json:"sample_axis"`
+}
+
+func savePrestackCompareReportDialog(owner uintptr, defaultName string) string {
+	buf := make([]uint16, 32768)
+	name := utf16.Encode([]rune(defaultName))
+	name = append(name, 0)
+	copy(buf, name)
+	filter := utf16.Encode([]rune("CSV 匹配报告 (*.csv)\x00*.csv\x00JSON 匹配报告 (*.json)\x00*.json\x00\x00"))
+	of := OPENFILENAME{LStructSize: uint32(unsafe.Sizeof(OPENFILENAME{})), HwndOwner: owner, NFilterIndex: 1,
+		LpstrFilter: uintptr(unsafe.Pointer(&filter[0])), LpstrFile: uintptr(unsafe.Pointer(&buf[0])), NMaxFile: uint32(len(buf)),
+		Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT, LpstrDefExt: uintptr(unsafe.Pointer(u16("csv")))}
+	if ok, _, _ := pGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&of))); ok != 0 {
+		return syscall.UTF16ToString(buf)
+	}
+	return ""
+}
+
+func exportPrestackCompareReport() {
+	if prestackState.dataset == nil || prestackState.compareBDataset == nil {
+		setPrestackStatus("请先加载 B 并完成索引。")
+		return
+	}
+	path := savePrestackCompareReportDialog(prestackHwnd, prestackExportStem()+"_compare.csv")
+	if path == "" {
+		return
+	}
+	report := prestackCompareReport{Version: "1.10.3-prestack-compare-v1", APath: prestackState.dataset.Path,
+		BPath: prestackState.compareBDataset.Path, Selection: prestackSelectionKeyLabel(prestackState.selection),
+		Result: prestackState.compareBMatch.Clone(), SampleAxis: prestackState.compareBAxis}
+	var err error
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		var data []byte
+		data, err = json.MarshalIndent(report, "", "  ")
+		if err == nil {
+			err = os.WriteFile(path, data, 0o644)
+		}
+	} else {
+		f, createErr := os.Create(path)
+		if createErr != nil {
+			err = createErr
+		} else {
+			w := csv.NewWriter(f)
+			err = w.Write([]string{"a_path", "b_path", "selection", "strategy", "a_trace", "b_trace", "key_strategy", "source_id", "receiver_id", "cdp", "offset"})
+			if err == nil {
+				for _, pair := range report.Result.Pairs {
+					if err = w.Write([]string{report.APath, report.BPath, report.Selection, report.Result.Strategy.String(), strconv.FormatInt(pair.ATrace, 10), strconv.FormatInt(pair.BTrace, 10), pair.Strategy.String(), strconv.FormatInt(int64(pair.Key.SourceID), 10), strconv.FormatInt(int64(pair.Key.ReceiverID), 10), strconv.FormatInt(int64(pair.Key.CDP), 10), strconv.FormatFloat(pair.Key.Offset, 'g', -1, 64)}); err != nil {
+						break
+					}
+				}
+			}
+			w.Flush()
+			if err == nil {
+				err = w.Error()
+			}
+			if closeErr := f.Close(); err == nil {
+				err = closeErr
+			}
+		}
+	}
+	if err != nil {
+		message(prestackHwnd, "匹配报告", err.Error(), MB_OK|MB_ICONERROR)
+		return
+	}
+	setPrestackStatus("A/B 匹配报告已导出：" + path)
 }

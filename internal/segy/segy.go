@@ -1007,10 +1007,17 @@ func RenderTraceDifferencePairs(a, b *File, tracesA, tracesB []int64, o RenderOp
 	if a.Info.SampleIntervalUS != b.Info.SampleIntervalUS {
 		return nil, RenderStats{}, fmt.Errorf("A-B residual requires matching sample intervals (A=%d us, B=%d us)", a.Info.SampleIntervalUS, b.Info.SampleIntervalUS)
 	}
+	// A residual is a sample-for-sample operation.  Silently truncating to the
+	// shorter record (the former min(...) behavior) shifts the meaning of the
+	// last samples and can make an apparently valid delta hide an axis mismatch.
+	// Reject the pair instead; callers can still show A and B independently.
+	if a.Info.SamplesPerTrace != b.Info.SamplesPerTrace {
+		return nil, RenderStats{}, fmt.Errorf("A-B residual requires matching sample counts (A=%d, B=%d)", a.Info.SamplesPerTrace, b.Info.SamplesPerTrace)
+	}
 	if o.Width < 2 || o.Height < 2 {
 		return nil, RenderStats{}, errors.New("invalid image dimensions")
 	}
-	ns := min(a.Info.SamplesPerTrace, b.Info.SamplesPerTrace)
+	ns := a.Info.SamplesPerTrace
 	sm0, sm1 := o.SampleStart, o.SampleEnd
 	if sm0 < 0 {
 		sm0 = 0

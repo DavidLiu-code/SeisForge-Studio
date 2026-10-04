@@ -521,6 +521,49 @@ func TestRenderTraceDifferencePairs(t *testing.T) {
 	}
 }
 
+func TestRenderTraceDifferencePairsRejectsSampleCountMismatch(t *testing.T) {
+	dir := t.TempDir()
+	makeFile := func(path string, samples int) {
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header := make([]byte, 3600)
+		binary.BigEndian.PutUint16(header[3216:3218], 2000)
+		binary.BigEndian.PutUint16(header[3220:3222], uint16(samples))
+		binary.BigEndian.PutUint16(header[3224:3226], 5)
+		if _, err := f.Write(header); err != nil {
+			t.Fatal(err)
+		}
+		raw := make([]byte, 240+samples*4)
+		for i := 0; i < samples; i++ {
+			binary.BigEndian.PutUint32(raw[240+i*4:244+i*4], math.Float32bits(float32(i)))
+		}
+		if _, err := f.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pa, pb := dir+"/a.sgy", dir+"/b.sgy"
+	makeFile(pa, 4)
+	makeFile(pb, 5)
+	a, err := Open(pa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if _, _, err := RenderTraceDifferencePairs(a, b, []int64{0}, []int64{0}, RenderOptions{Width: 8, Height: 8, SampleStart: 0, SampleEnd: 3}); err == nil {
+		t.Fatal("sample-count mismatch was silently truncated")
+	}
+}
+
 func TestGeometryFastRegularPathAndIrregularFallback(t *testing.T) {
 	makeCube := func(path string, missing bool) {
 		const ns = 12
