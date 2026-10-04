@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"unicode/utf16"
@@ -21,6 +22,64 @@ var prestackQCCache struct {
 	report    prestackcore.QCReport
 }
 
+const (
+	prestackDTCalcRect = 0x0400
+	prestackDTTop      = 0x0000
+)
+
+// drawPrestackQCText deliberately bypasses drawAxisText.  The latter is
+// intended for one-line seismic labels and always adds DT_SINGLELINE, which
+// prevents QC summaries from wrapping when the window becomes narrow.
+func drawPrestackQCTextRect(hdc uintptr, text string, r *RECT, flags uint32) int {
+	if r == nil {
+		return 0
+	}
+	// Win32 DrawTextW treats CRLF as the portable paragraph separator.  The
+	// report formatter uses LF internally, so normalize it at the drawing
+	// boundary to keep measurement and the final paint identical.
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\n", "\r\n")
+	flags &^= DT_SINGLELINE
+	flags |= prestackDTTop
+	n, _, _ := pDrawTextW.Call(hdc, uintptr(unsafe.Pointer(u16(text))), uintptr(^uint32(0)), uintptr(unsafe.Pointer(r)), uintptr(flags))
+	return int(n)
+}
+
+func drawPrestackQCText(hdc uintptr, text string, r RECT, flags uint32) int {
+	return drawPrestackQCTextRect(hdc, text, &r, flags)
+}
+
+func measurePrestackQCText(hdc uintptr, text string, width int) int {
+	if width < 1 {
+		return 0
+	}
+	normalized := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\n", "\r\n")
+	// DT_CALCRECT expands the rectangle from its initial height.  Start at a
+	// small positive height and keep an explicit-line fallback so a platform
+	// text renderer that returns an empty height can never collapse the report
+	// into a one-pixel strip.
+	r := RECT{Right: int32(width), Bottom: 1}
+	flags := uint32(DT_LEFT | prestackDTTop | DT_WORDBREAK | prestackDTCalcRect)
+	drawPrestackQCTextRect(hdc, normalized, &r, flags)
+	height := int(r.Bottom - r.Top)
+	lineHeight := 18
+	minimum := (strings.Count(normalized, "\r\n") + 1) * lineHeight
+	return maxInt(minimum, height)
+}
+
+// prestackQCContentRect excludes the native status/progress controls.  QC is
+// painted by the parent window, so the chart area must end before those child
+// windows even while the user is resizing the frame.
+func prestackQCContentRect(r RECT) RECT {
+	content := RECT{Left: 20, Top: 114, Right: r.Right - 20, Bottom: r.Bottom - 42}
+	if content.Right < content.Left+1 {
+		content.Right = content.Left + 1
+	}
+	if content.Bottom < content.Top+1 {
+		content.Bottom = content.Top + 1
+	}
+	return content
+}
+
 func prestackRangeText(r prestackcore.ValueRange) string {
 	if !r.Valid {
 		return "n/a"
@@ -30,42 +89,82 @@ func prestackRangeText(r prestackcore.ValueRange) string {
 
 func paintPrestackQC(dc uintptr) {
 	r := clientRect(prestackHwnd)
+	content := prestackQCContentRect(r)
+	saved, _, _ := pSaveDC.Call(dc)
+	pIntersectClipRect.Call(dc, uintptr(content.Left), uintptr(content.Top), uintptr(content.Right), uintptr(content.Bottom))
+	defer pRestoreDC.Call(dc, saved)
 	if prestackState.index == nil {
-		drawAxisText(dc, "索引完成后显示道头质量统计；QC 不读取地震振幅。", 20, 125, int(r.Right)-20, 160, DT_LEFT|DT_SINGLELINE)
+		drawPrestackQCText(dc, "索引完成后显示道头质量统计；QC 不读取地震振幅。", content, DT_LEFT|prestackDTTop|DT_WORDBREAK)
 		return
 	}
 	report := prestackQCReport()
 	q := report.Quality
-	summary := fmt.Sprintf("文件：物理道 %d | 已索引 %d | 有效道头 %d | 无效道头 %d\n缺失：CDP %d | FFID %d | Source %d | Receiver %d | Offset %d\n质量：坐标比例异常 %d | 样点数不一致 %d | 采样间隔不一致 %d\n道集：CMP %d | Shot %d | Receiver %d | 共Offset %d（分箱 %g）\nFold：%d..%d，平均 %.2f | Offset %s | Azimuth %s\n当前：%s %s | 物理道 %d | Fold %d | Offset %s | Azimuth %s",
+	currentFold := fmt.Sprintf("%d", report.CurrentGather.Fold)
+	currentKey := report.CurrentGather.Key
+	if report.CurrentGather.All {
+		currentFold = "全文件"
+		currentKey += "（全文件）"
+	}
+	summary := fmt.Sprintf("文件：物理道 %d | 已索引 %d | 有效道头 %d | 无效道头 %d\n缺失：CDP %d | FFID %d | Source %d | Receiver %d | Offset %d\n质量：坐标比例异常 %d | 样点数不一致 %d | 采样间隔不一致 %d\n道集：CMP %d | Shot %d | Receiver %d | 共Offset %d（分箱 %g）\nFold：%d..%d，平均 %.2f | Offset %s | Azimuth %s\n当前：%s %s | 物理道 %d | Fold %s | Offset %s | Azimuth %s",
 		q.TotalTraces, q.IndexedTraces, q.ValidHeaderTraces, q.InvalidHeaderTraces,
 		q.MissingCDP, q.MissingFFID, q.MissingSource, q.MissingReceiver, q.MissingOffset,
 		q.CoordinateScalarErrors, q.SampleCountInconsistent, q.SampleIntervalInconsistent,
 		q.CMPCount, q.ShotCount, q.ReceiverCount, q.CommonOffsetBinCount, prestackState.offsetBinSize,
 		q.Fold.Min, q.Fold.Max, q.Fold.Mean, prestackRangeText(q.OffsetRange), prestackRangeText(q.AzimuthRange),
-		report.CurrentGather.Type, report.CurrentGather.Key, report.CurrentGather.PhysicalTraceCount, report.CurrentGather.Fold,
+		report.CurrentGather.Type, currentKey, report.CurrentGather.PhysicalTraceCount, currentFold,
 		prestackRangeText(report.CurrentGather.OffsetRange), prestackRangeText(report.CurrentGather.AzimuthRange))
-	drawAxisText(dc, summary, 20, 115, int(r.Right)-20, 268, DT_LEFT|DT_WORDBREAK)
-	drawAxisText(dc, "全文件分布（蓝） / 当前道集（橙）；零值不是无效值。仅统计道头元数据。", 20, 271, int(r.Right)-20, 300, DT_LEFT|DT_SINGLELINE)
+	width := int(content.Right - content.Left)
+	summaryHeight := measurePrestackQCText(dc, summary, width)
+	summaryBottom := content.Top + int32(summaryHeight)
+	if summaryBottom > content.Bottom {
+		summaryBottom = content.Bottom
+	}
+	summaryRect := RECT{Left: content.Left, Top: content.Top, Right: content.Right, Bottom: summaryBottom}
+	drawPrestackQCText(dc, summary, summaryRect, DT_LEFT|prestackDTTop|DT_WORDBREAK)
+	// When the frame is too short even the wrapped summary can consume the
+	// entire QC content area.  Do not construct inverted legend/chart
+	// rectangles in that case; the parent background remains clean and the
+	// user gets a deterministic resize hint once there is room for it.
+	if summaryBottom >= content.Bottom-12 {
+		return
+	}
+	legendY := summaryRect.Bottom + 10
+	legend := "全文件分布（蓝） / 当前道集（橙）；零值不是无效值。仅统计道头元数据。"
+	if report.CurrentGather.All {
+		legend = "全文件分布（蓝）；当前为全文件范围，不重复叠加橙色。零值不是无效值。仅统计道头元数据。"
+	}
+	drawAxisText(dc, legend, int(content.Left), int(legendY), int(content.Right), int(legendY)+22, DT_LEFT|DT_SINGLELINE)
+	chartTop := legendY + 30
 	charts := []struct {
 		name string
 		data prestackcore.Distribution
 	}{{"Fold 分布", q.FoldDistribution}, {"Offset 分布", q.OffsetDistribution}, {"Azimuth 分布", q.AzimuthDistribution}}
-	// At narrow widths stack charts instead of clipping their labels.
-	if r.Right < 900 {
-		height := maxInt(90, (int(r.Bottom)-345)/3)
+	chartBottom := content.Bottom - 25
+	if chartBottom <= chartTop+60 {
+		drawAxisText(dc, "窗口高度不足，请放大窗口以显示 QC 分布图。", int(content.Left), int(chartTop), int(content.Right), int(content.Bottom), DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		return
+	}
+	// At narrow widths stack charts instead of clipping their labels.  The
+	// available height is computed from the wrapped summary, so charts never
+	// occupy a stale fixed area after a resize.
+	if content.Right-content.Left < 880 {
+		height := (int(chartBottom) - int(chartTop)) / 3
 		for i, chart := range charts {
-			paintPrestackDistribution(dc, chart.name, chart.data, RECT{Left: 35, Top: int32(310 + i*height), Right: r.Right - 25, Bottom: int32(305 + (i+1)*height)})
+			top := int(chartTop) + i*height
+			bottom := int(chartTop) + (i+1)*height - 3
+			paintPrestackDistribution(dc, chart.name, chart.data, RECT{Left: content.Left + 15, Top: int32(top), Right: content.Right - 5, Bottom: int32(bottom)})
 		}
 	} else {
-		width := (int(r.Right) - 60) / 3
+		width := (int(content.Right-content.Left) - 10) / 3
 		for i, chart := range charts {
-			paintPrestackDistribution(dc, chart.name, chart.data, RECT{Left: int32(25 + i*width), Top: 310, Right: int32(15 + (i+1)*width), Bottom: r.Bottom - 50})
+			left := int(content.Left) + i*width
+			paintPrestackDistribution(dc, chart.name, chart.data, RECT{Left: int32(left), Top: chartTop, Right: int32(left + width - 8), Bottom: chartBottom})
 		}
 	}
 }
 
 func prestackQCReport() prestackcore.QCReport {
-	if prestackQCCache.index == prestackState.index && prestackQCCache.selection == prestackState.gather.Selection &&
+	if prestackQCCache.index == prestackState.index && reflect.DeepEqual(prestackQCCache.selection, prestackState.gather.Selection) &&
 		prestackQCCache.count == len(prestackState.gather.TraceIndices) && prestackQCCache.binSize == prestackState.offsetBinSize {
 		return prestackQCCache.report
 	}

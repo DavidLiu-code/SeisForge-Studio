@@ -39,7 +39,9 @@ var (
 	pBeginPaint               = user32.NewProc("BeginPaint")
 	pEndPaint                 = user32.NewProc("EndPaint")
 	pGetClientRect            = user32.NewProc("GetClientRect")
+	pAdjustWindowRectEx       = user32.NewProc("AdjustWindowRectEx")
 	pInvalidateRect           = user32.NewProc("InvalidateRect")
+	pRedrawWindow             = user32.NewProc("RedrawWindow")
 	pMessageBoxW              = user32.NewProc("MessageBoxW")
 	pSetWindowTextW           = user32.NewProc("SetWindowTextW")
 	pGetWindowTextW           = user32.NewProc("GetWindowTextW")
@@ -78,6 +80,7 @@ var (
 	pSelectObject           = gdi32.NewProc("SelectObject")
 	pMoveToEx               = gdi32.NewProc("MoveToEx")
 	pLineTo                 = gdi32.NewProc("LineTo")
+	pPolygon                = gdi32.NewProc("Polygon")
 	pEllipse                = gdi32.NewProc("Ellipse")
 	pSetTextColor           = gdi32.NewProc("SetTextColor")
 	pSetBkMode              = gdi32.NewProc("SetBkMode")
@@ -172,6 +175,10 @@ const (
 	VK_DIVIDE           = 0x6F
 	VK_HOME             = 0x24
 	VK_LEFT             = 0x25
+	RDW_INVALIDATE      = 0x0001
+	RDW_ERASE           = 0x0004
+	RDW_ALLCHILDREN     = 0x0080
+	RDW_UPDATENOW       = 0x0100
 	VK_UP               = 0x26
 	VK_RIGHT            = 0x27
 	VK_DOWN             = 0x28

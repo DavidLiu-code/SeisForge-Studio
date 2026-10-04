@@ -57,16 +57,23 @@ func BuildQCReport(index *PrestackIndex, current GatherResult) QCReport {
 		return QCReport{Version: qcReportVersion}
 	}
 	q := index.QualityStats()
-	q.FoldDistribution = addCurrentCounts(q.FoldDistribution, []float64{float64(len(current.TraceIndices))})
-	q.OffsetDistribution = addCurrentCounts(q.OffsetDistribution, selectedOffsetValues(index, current.TraceIndices))
-	q.AzimuthDistribution = addCurrentCounts(q.AzimuthDistribution, selectedAzimuthValues(index, current.TraceIndices))
+	isAll := current.Selection.Key.All
+	if !isAll {
+		// All is a file-wide view, not one enormous Fold bucket.
+		q.FoldDistribution = addCurrentCounts(q.FoldDistribution, []float64{float64(len(current.TraceIndices))})
+		q.OffsetDistribution = addCurrentCounts(q.OffsetDistribution, selectedOffsetValues(index, current.TraceIndices))
+		q.AzimuthDistribution = addCurrentCounts(q.AzimuthDistribution, selectedAzimuthValues(index, current.TraceIndices))
+	}
 	summary := GatherQCSummary{
 		Type:               current.Selection.Type.String(),
 		Key:                current.Selection.Key.String(),
+		All:                isAll,
 		PhysicalTraceCount: len(current.TraceIndices),
-		Fold:               len(current.TraceIndices),
 		OffsetRange:        current.OffsetRange,
 		AzimuthRange:       current.AzimuthRange,
+	}
+	if !isAll {
+		summary.Fold = len(current.TraceIndices)
 	}
 	return QCReport{Version: qcReportVersion, SourcePath: index.SourcePath, Quality: q, CurrentGather: summary}
 }
@@ -130,6 +137,7 @@ func MarshalCSVReport(report QCReport) ([]byte, error) {
 	writeRange("file", "azimuth", report.Quality.AzimuthRange)
 	write("current_gather", "type", report.CurrentGather.Type)
 	write("current_gather", "key", report.CurrentGather.Key)
+	write("current_gather", "all", strconv.FormatBool(report.CurrentGather.All))
 	write("current_gather", "physical_trace_count", strconv.Itoa(report.CurrentGather.PhysicalTraceCount))
 	write("current_gather", "fold", strconv.Itoa(report.CurrentGather.Fold))
 	writeRange("current_gather", "offset", report.CurrentGather.OffsetRange)

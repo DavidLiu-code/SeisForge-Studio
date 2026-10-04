@@ -22,9 +22,33 @@ const (
 	// after the historical gather values so persisted/UI enum values remain
 	// compatible with CMP, Shot, Receiver and Common Offset.
 	GatherRaw
+	// GatherAzimuth groups records by a stable azimuth bin.  It is appended
+	// after the historical values so persisted/UI enum values remain
+	// compatible with CMP, Shot, Receiver, Common Offset and Raw.
+	GatherAzimuth
 )
 
 const DefaultOffsetBinSize = 20.0
+
+// DefaultAzimuthBinSize is the angular width (degrees) used by the primary
+// Azimuth gather.  A fixed one-degree bin keeps the first-level category
+// useful without introducing another mandatory UI parameter; callers that
+// need a different width can use AvailableGathersAzimuthConfigured.
+const DefaultAzimuthBinSize = 1.0
+
+// CMPBinConfig describes the optional midpoint XY binning used by CMP/Bin
+// gathers.  Size is the edge length of the square bin in the source
+// coordinate units.  When OriginX and OriginY are both zero, the index
+// derives the origin from the minimum finite midpoint coordinates in the
+// records.  The configuration is deliberately in-memory only; it is not part
+// of any persisted index format.
+// A non-positive Size disables XY binning and preserves the historical
+// exact-CMP/IL/XL/CDP gather behavior.
+type CMPBinConfig struct {
+	Size    float64
+	OriginX float64
+	OriginY float64
+}
 
 // GatherCMPBin is the explicit name used by mapping pages; it aliases the
 // CMP/Bin gather without introducing another index table.
@@ -42,6 +66,8 @@ func (k GatherType) String() string {
 		return "Common Offset"
 	case GatherRaw:
 		return "Raw Trace Order"
+	case GatherAzimuth:
+		return "Azimuth"
 	default:
 		return "Unknown"
 	}
@@ -57,6 +83,66 @@ const (
 )
 
 const SortAbsOffset = SortAbsoluteOffset
+
+// SecondarySortMode controls ordering inside the primary gather category.
+// SecondaryUnset preserves the historical zero-value GatherSelection
+// behavior for callers compiled against earlier versions.  UI callers should
+// set an explicit mode (normally SecondaryPhysical) when they want the
+// all-range result grouped by its GatherType.
+type SecondarySortMode uint8
+
+const (
+	SecondaryUnset SecondarySortMode = iota
+	SecondaryPhysical
+	SecondaryOffset
+	SecondaryAbsoluteOffset
+	SecondaryAzimuth
+	SecondaryCMP
+	SecondaryShot
+	SecondaryReceiver
+	SecondaryCommonOffset
+)
+
+func (m SecondarySortMode) String() string {
+	switch m {
+	case SecondaryPhysical:
+		return "原始道序"
+	case SecondaryOffset:
+		return "Offset"
+	case SecondaryAbsoluteOffset:
+		return "|Offset|"
+	case SecondaryAzimuth:
+		return "Azimuth"
+	case SecondaryCMP:
+		return "CMP / CDP"
+	case SecondaryShot:
+		return "Shot / FFID"
+	case SecondaryReceiver:
+		return "Receiver"
+	case SecondaryCommonOffset:
+		return "Common Offset"
+	default:
+		return ""
+	}
+}
+
+// SecondarySortOptions returns the UI order for the explicit second-level
+// sorting choices.  SecondaryUnset is intentionally omitted because it is a
+// compatibility sentinel rather than a user-facing option.
+func SecondarySortOptions() []SecondarySortMode {
+	return []SecondarySortMode{SecondaryPhysical, SecondaryOffset, SecondaryAbsoluteOffset,
+		SecondaryAzimuth, SecondaryCMP, SecondaryShot, SecondaryReceiver, SecondaryCommonOffset}
+}
+
+// SecondarySortModeFromIndex converts the zero-based UI option index to the
+// corresponding explicit mode without exposing the compatibility sentinel.
+func SecondarySortModeFromIndex(index int) (SecondarySortMode, bool) {
+	options := SecondarySortOptions()
+	if index < 0 || index >= len(options) {
+		return SecondaryUnset, false
+	}
+	return options[index], true
+}
 
 type AxisMode uint8
 
@@ -155,6 +241,26 @@ type GatherKey struct {
 	OffsetCenter   float64
 	OffsetMin      float64
 	OffsetMax      float64
+	// AzimuthBin identifies a primary Azimuth gather.  The integer index is
+	// the stable identity; the remaining values describe the configured
+	// angular interval for display and diagnostics.
+	AzimuthBin      bool
+	AzimuthBinIndex int64
+	AzimuthCenter   float64
+	AzimuthMin      float64
+	AzimuthMax      float64
+	// CMPBin identifies a midpoint-XY CMP bin.  The integer indices are the
+	// stable key; the size/origin/centre fields retain the configuration and
+	// display metadata needed when a caller reconstructs a selection without
+	// retaining the original CMPBinConfig separately.
+	CMPBin        bool
+	CMPBinXIndex  int64
+	CMPBinYIndex  int64
+	CMPBinSize    float64
+	CMPBinOriginX float64
+	CMPBinOriginY float64
+	CMPBinCenterX float64
+	CMPBinCenterY float64
 }
 
 func (k GatherKey) String() string {
@@ -171,6 +277,20 @@ func (k GatherKey) String() string {
 		}
 		return fmt.Sprintf("Offset %g ±%g", k.OffsetCenter, half)
 	}
+	if k.AzimuthBin {
+		half := (k.AzimuthMax - k.AzimuthMin) / 2
+		if !(half > 0) || math.IsInf(half, 0) || math.IsNaN(half) {
+			half = DefaultAzimuthBinSize / 2
+		}
+		return fmt.Sprintf("Azimuth %g ±%g°", k.AzimuthCenter, half)
+	}
+	if k.CMPBin {
+		half := k.CMPBinSize / 2
+		if !(half > 0) || math.IsNaN(half) || math.IsInf(half, 0) {
+			half = 0
+		}
+		return fmt.Sprintf("CMP XY (%d,%d) %g / %g ±%g", k.CMPBinXIndex, k.CMPBinYIndex, k.CMPBinCenterX, k.CMPBinCenterY, half)
+	}
 	if k.Coordinate {
 		return fmt.Sprintf("XY %g / %g", k.X, k.Y)
 	}
@@ -183,11 +303,27 @@ func (k GatherKey) String() string {
 type GatherSelection struct {
 	Type GatherType
 	Key  GatherKey
+	// Keys optionally selects several concrete bins/gathers at once. When
+	// non-empty, Key is treated as a synthetic all-range marker for sorting and
+	// display, while the records are limited to the listed keys. The slice is
+	// metadata-only and keeps the caller's requested key order before the
+	// normal primary/secondary ordering is applied.
+	Keys []GatherKey
 	Sort SortMode
-	Axis AxisMode
+	// Secondary is the explicit second-level ordering selected by the viewer.
+	// SecondaryUnset retains the historical behavior, while any explicit mode
+	// also enables primary grouping for an all-range selection.
+	Secondary SecondarySortMode
+	Axis      AxisMode
 	// OffsetBinSize is used only for GatherOffset.  Values <= 0 or non-finite
 	// values use DefaultOffsetBinSize, making zero-value selections safe.
 	OffsetBinSize float64
+	// AzimuthBinSize is used only for GatherAzimuth. Values <= 0 or non-finite
+	// values use DefaultAzimuthBinSize, making zero-value selections safe.
+	AzimuthBinSize float64
+	// CMPBin carries an optional midpoint-XY bin configuration for
+	// GatherCMP.  Size <= 0 leaves the existing exact CMP grouping intact.
+	CMPBin CMPBinConfig
 	// RawTraceStart/RawTraceEnd describe a zero-based half-open physical trace
 	// range when Type is GatherRaw.  A zero end means the file end, making the
 	// zero-value selection naturally mean the complete file.  Negative values
@@ -359,8 +495,11 @@ type QualityStats struct {
 
 // GatherQCSummary describes the active gather at report time.
 type GatherQCSummary struct {
-	Type               string     `json:"type"`
-	Key                string     `json:"key"`
+	Type string `json:"type"`
+	Key  string `json:"key"`
+	// All marks the synthetic full-file selection. Its physical trace count
+	// must not be presented as a single gather Fold.
+	All                bool       `json:"all"`
 	PhysicalTraceCount int        `json:"physical_trace_count"`
 	Fold               int        `json:"fold"`
 	OffsetRange        ValueRange `json:"offset_range"`

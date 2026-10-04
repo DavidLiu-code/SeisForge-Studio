@@ -79,6 +79,26 @@ func TestQualityStatsMetadataAndReports(t *testing.T) {
 	}
 }
 
+func TestBuildQCReportAllRangeIsNotOneFold(t *testing.T) {
+	index := &PrestackIndex{SourcePath: "synthetic.sgy", Records: []PrestackTraceRecord{
+		{TraceNumber: 0, HeaderValid: true, HasCDP: true, CDP: 1, HasOffset: true, Offset: -10},
+		{TraceNumber: 1, HeaderValid: true, HasCDP: true, CDP: 1, HasOffset: true, Offset: 10},
+	}}
+	// QualityStats is intentionally lazy for synthetic indexes. The all-range
+	// report must still identify the selection without manufacturing a Fold of 2.
+	all, err := index.Gather(GatherSelection{Type: GatherCMP, Key: GatherKey{All: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := BuildQCReport(index, all)
+	if !report.CurrentGather.All || report.CurrentGather.PhysicalTraceCount != 2 || report.CurrentGather.Fold != 0 {
+		t.Fatalf("all-range summary=%+v", report.CurrentGather)
+	}
+	if currentHistogramCount(report.Quality.FoldDistribution) != 0 {
+		t.Fatalf("all-range fold overlay should be empty: %+v", report.Quality.FoldDistribution)
+	}
+}
+
 func TestQualityStatsZerosScalarsAndMissingHeaders(t *testing.T) {
 	index := &PrestackIndex{Mapping: DefaultHeaderMapping(), BinarySampleCount: 4, BinarySampleIntervalUS: 2000, Records: []PrestackTraceRecord{
 		{TraceNumber: 0, HeaderValid: true, SourceID: 1, ReceiverID: 2, HasCDP: true, HasOffset: true, Offset: 0, CoordinateScalar: 0, CoordinateScalarValid: true, HeaderSampleCount: 4, HeaderSampleIntervalUS: 2000, SampleCount: 4, SampleIntervalUS: 2000},

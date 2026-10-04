@@ -342,6 +342,38 @@ func (p *PrestackIndex) buildTables(ctx context.Context) error {
 }
 
 func keyLess(a, b GatherKey) bool {
+	if a.CMPBin != b.CMPBin {
+		return !a.CMPBin
+	}
+	if a.CMPBin {
+		if a.CMPBinXIndex != b.CMPBinXIndex {
+			return a.CMPBinXIndex < b.CMPBinXIndex
+		}
+		if a.CMPBinYIndex != b.CMPBinYIndex {
+			return a.CMPBinYIndex < b.CMPBinYIndex
+		}
+		if a.CMPBinSize != b.CMPBinSize {
+			return a.CMPBinSize < b.CMPBinSize
+		}
+		if a.CMPBinOriginX != b.CMPBinOriginX {
+			return a.CMPBinOriginX < b.CMPBinOriginX
+		}
+		return a.CMPBinOriginY < b.CMPBinOriginY
+	}
+	if a.AzimuthBin != b.AzimuthBin {
+		return !a.AzimuthBin
+	}
+	if a.AzimuthBin {
+		if a.AzimuthBinIndex != b.AzimuthBinIndex {
+			return a.AzimuthBinIndex < b.AzimuthBinIndex
+		}
+		aWidth := a.AzimuthMax - a.AzimuthMin
+		bWidth := b.AzimuthMax - b.AzimuthMin
+		if aWidth != bWidth {
+			return aWidth < bWidth
+		}
+		return a.AzimuthMin < b.AzimuthMin
+	}
 	if a.Grid != b.Grid {
 		return !a.Grid
 	}
@@ -361,6 +393,41 @@ func keyLess(a, b GatherKey) bool {
 		return a.Crossline < b.Crossline
 	}
 	return a.ID < b.ID
+}
+
+// AvailableCMPGathersConfigured returns midpoint XY CMP bins for a positive
+// square size.  The origin defaults to the minimum finite midpoint X/Y in the
+// index, which makes the first bin start at the left/bottom edge of the data.
+// A non-positive or non-finite size returns the historical exact CMP keys.
+// Returned keys are ordered by X bin index then Y bin index and never include
+// the synthetic GatherKey{All:true} key used by the UI.
+func (p *PrestackIndex) AvailableCMPGathersConfigured(cfg CMPBinConfig) []GatherKey {
+	if p == nil {
+		return nil
+	}
+	cfg, ok := normalizeCMPBinConfig(p, cfg)
+	if !ok {
+		return append([]GatherKey(nil), p.tables[GatherCMP].keys...)
+	}
+	type binID struct{ x, y int64 }
+	ids := make(map[binID]struct{})
+	for _, r := range p.Records {
+		x, y, valid := cmpBinIndices(r, cfg)
+		if valid {
+			ids[binID{x: x, y: y}] = struct{}{}
+		}
+	}
+	keys := make([]GatherKey, 0, len(ids))
+	for id := range ids {
+		keys = append(keys, makeCMPBinKey(id.x, id.y, cfg))
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].CMPBinXIndex != keys[j].CMPBinXIndex {
+			return keys[i].CMPBinXIndex < keys[j].CMPBinXIndex
+		}
+		return keys[i].CMPBinYIndex < keys[j].CMPBinYIndex
+	})
+	return keys
 }
 
 func (p *PrestackIndex) buildBins() {
@@ -404,7 +471,7 @@ func (p *PrestackIndex) buildBins() {
 }
 
 func (p *PrestackIndex) AvailableGathers(kind GatherType) []GatherKey {
-	if p == nil || kind > GatherRaw {
+	if p == nil || kind > GatherAzimuth {
 		return nil
 	}
 	if kind == GatherRaw {
@@ -416,6 +483,9 @@ func (p *PrestackIndex) AvailableGathers(kind GatherType) []GatherKey {
 	if kind == GatherOffset {
 		return p.AvailableGathersConfigured(kind, DefaultOffsetBinSize)
 	}
+	if kind == GatherAzimuth {
+		return p.AvailableGathersAzimuthConfigured(DefaultAzimuthBinSize)
+	}
 	return append([]GatherKey(nil), p.tables[kind].keys...)
 }
 
@@ -423,7 +493,7 @@ func (p *PrestackIndex) AvailableGathers(kind GatherType) []GatherKey {
 // Offset keys are generated from the metadata records using the requested
 // bin width; CMP/Shot/Receiver continue to use their compact CSR tables.
 func (p *PrestackIndex) AvailableGathersConfigured(kind GatherType, offsetBinSize float64) []GatherKey {
-	if p == nil || kind > GatherRaw {
+	if p == nil || kind > GatherAzimuth {
 		return nil
 	}
 	if kind == GatherRaw {
@@ -431,6 +501,15 @@ func (p *PrestackIndex) AvailableGathersConfigured(kind GatherType, offsetBinSiz
 			return nil
 		}
 		return []GatherKey{{Raw: true}}
+	}
+	if kind == GatherCMP {
+		// The historical API has no CMP configuration argument.  Keep it exact
+		// and let callers opt into midpoint bins through
+		// AvailableCMPGathersConfigured.
+		return append([]GatherKey(nil), p.tables[kind].keys...)
+	}
+	if kind == GatherAzimuth {
+		return p.AvailableGathersAzimuthConfigured(offsetBinSize)
 	}
 	if kind != GatherOffset {
 		return append([]GatherKey(nil), p.tables[kind].keys...)
@@ -448,6 +527,28 @@ func (p *PrestackIndex) AvailableGathersConfigured(kind GatherType, offsetBinSiz
 		keys = append(keys, offsetBinKey(index, width))
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].OffsetBinIndex < keys[j].OffsetBinIndex })
+	return keys
+}
+
+// AvailableGathersAzimuthConfigured returns stable azimuth bins using the
+// requested angular width in degrees. Only finite records carrying a valid
+// azimuth participate; missing azimuths are not fabricated as zero.
+func (p *PrestackIndex) AvailableGathersAzimuthConfigured(binSize float64) []GatherKey {
+	if p == nil {
+		return nil
+	}
+	width := normalizeAzimuthBinSize(binSize)
+	indices := make(map[int64]struct{})
+	for _, r := range p.Records {
+		if validAzimuthRecord(r) {
+			indices[azimuthBinIndex(r.Azimuth, width)] = struct{}{}
+		}
+	}
+	keys := make([]GatherKey, 0, len(indices))
+	for index := range indices {
+		keys = append(keys, azimuthBinKey(index, width))
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].AzimuthBinIndex < keys[j].AzimuthBinIndex })
 	return keys
 }
 
@@ -469,15 +570,47 @@ func (p *PrestackIndex) FoldStatistics() FoldStatistics {
 }
 
 func (p *PrestackIndex) Gather(selection GatherSelection) (GatherResult, error) {
-	if p == nil || selection.Type > GatherRaw {
+	if p == nil || selection.Type > GatherAzimuth {
 		return GatherResult{}, errors.New("invalid gather type")
 	}
-	if selection.Sort > SortAzimuth || selection.Axis > AxisOffset {
+	if selection.Sort > SortAzimuth || selection.Secondary > SecondaryCommonOffset || selection.Axis > AxisOffset {
 		return GatherResult{}, errors.New("invalid gather display settings")
 	}
 	var records []int
 	var rawStart, rawEnd int64
-	if selection.Type != GatherRaw && selection.Key.All {
+	if selection.Type != GatherRaw && len(selection.Keys) > 0 {
+		// Resolve each requested concrete key through the normal single-gather
+		// path, then merge and de-duplicate physical traces. The final explicit
+		// all-range marker makes primary/secondary ordering deterministic across
+		// the selected bins while Keys keeps the selection available to the UI,
+		// title and export layers.
+		traceToRecord := make(map[int64]int, len(p.Records))
+		for i, r := range p.Records {
+			traceToRecord[r.TraceNumber] = i
+		}
+		seen := make(map[int]struct{})
+		for _, key := range selection.Keys {
+			partSelection := selection
+			partSelection.Keys = nil
+			partSelection.Key = key
+			part, err := p.Gather(partSelection)
+			if err != nil {
+				return GatherResult{}, err
+			}
+			for _, trace := range part.TraceIndices {
+				if record, ok := traceToRecord[trace]; ok {
+					if _, exists := seen[record]; !exists {
+						seen[record] = struct{}{}
+						records = append(records, record)
+					}
+				}
+			}
+		}
+		if len(records) == 0 {
+			return GatherResult{}, errors.New("selected gather keys are empty")
+		}
+		selection.Key = GatherKey{All: true}
+	} else if selection.Type != GatherRaw && selection.Key.All {
 		// "全部范围" is a synthetic selection used by the viewer. Keep the
 		// requested gather type for labels and sorting, but include every
 		// physical record so users can inspect the complete acquisition range
@@ -503,6 +636,25 @@ func (p *PrestackIndex) Gather(selection GatherSelection) (GatherResult, error) 
 		selection.Sort = SortPhysical
 		selection.Axis = AxisTrace
 		selection.RawTraceStart, selection.RawTraceEnd = rawStart, rawEnd
+	} else if selection.Type == GatherCMP && selection.Key.CMPBin {
+		cfg, ok := normalizeCMPSelectionConfig(p, selection)
+		if !ok {
+			return GatherResult{}, errors.New("invalid CMP midpoint bin configuration")
+		}
+		xIndex, yIndex := selection.Key.CMPBinXIndex, selection.Key.CMPBinYIndex
+		// Rebuild the display metadata from the normalized configuration so a
+		// key reconstructed from only its integer indices remains usable.
+		selection.CMPBin = cfg
+		selection.Key = makeCMPBinKey(xIndex, yIndex, cfg)
+		for i, r := range p.Records {
+			x, y, valid := cmpBinIndices(r, cfg)
+			if valid && x == xIndex && y == yIndex {
+				records = append(records, i)
+			}
+		}
+		if len(records) == 0 {
+			return GatherResult{}, fmt.Errorf("%s gather %s is unavailable", selection.Type, selection.Key)
+		}
 	} else if selection.Type == GatherOffset {
 		width := selection.OffsetBinSize
 		// A key returned by AvailableGathersConfigured carries its configured
@@ -531,6 +683,26 @@ func (p *PrestackIndex) Gather(selection GatherSelection) (GatherResult, error) 
 		if len(records) == 0 {
 			return GatherResult{}, fmt.Errorf("%s gather %s is unavailable", selection.Type, selection.Key)
 		}
+	} else if selection.Type == GatherAzimuth {
+		width := normalizeAzimuthBinSize(selection.AzimuthBinSize)
+		if selection.Key.AzimuthMax > selection.Key.AzimuthMin &&
+			!math.IsNaN(selection.Key.AzimuthMax-selection.Key.AzimuthMin) &&
+			!math.IsInf(selection.Key.AzimuthMax-selection.Key.AzimuthMin, 0) {
+			width = normalizeAzimuthBinSize(selection.Key.AzimuthMax - selection.Key.AzimuthMin)
+		}
+		selection.AzimuthBinSize = width
+		if !selection.Key.AzimuthBin {
+			return GatherResult{}, fmt.Errorf("%s gather %s is unavailable", selection.Type, selection.Key)
+		}
+		target := selection.Key.AzimuthBinIndex
+		for i, r := range p.Records {
+			if validAzimuthRecord(r) && azimuthBinIndex(r.Azimuth, width) == target {
+				records = append(records, i)
+			}
+		}
+		if len(records) == 0 {
+			return GatherResult{}, fmt.Errorf("%s gather %s is unavailable", selection.Type, selection.Key)
+		}
 	} else {
 		t := p.tables[selection.Type]
 		at := sort.Search(len(t.keys), func(i int) bool { return !keyLess(t.keys[i], selection.Key) })
@@ -539,30 +711,7 @@ func (p *PrestackIndex) Gather(selection GatherSelection) (GatherResult, error) 
 		}
 		records = append([]int(nil), t.records[t.starts[at]:t.starts[at+1]]...)
 	}
-	if selection.Sort != SortPhysical {
-		sort.SliceStable(records, func(i, j int) bool {
-			a, b := p.Records[records[i]], p.Records[records[j]]
-			if selection.Sort == SortOffset || selection.Sort == SortAbsoluteOffset {
-				if a.HasOffset != b.HasOffset {
-					return a.HasOffset
-				}
-			}
-			x, y := a.Offset, b.Offset
-			switch selection.Sort {
-			case SortAbsoluteOffset:
-				x, y = math.Abs(x), math.Abs(y)
-			case SortAzimuth:
-				if a.HasAzimuth != b.HasAzimuth {
-					return a.HasAzimuth
-				}
-				x, y = a.Azimuth, b.Azimuth
-			}
-			if x == y {
-				return a.TraceNumber < b.TraceNumber
-			}
-			return x < y
-		})
-	}
+	p.sortGatherRecords(records, selection)
 	out := GatherResult{Selection: selection, TraceIndices: make([]int64, len(records)), Positions: make([]float64, len(records)), RawTraceStart: rawStart, RawTraceEnd: rawEnd}
 	for i, index := range records {
 		r := p.Records[index]
@@ -622,7 +771,7 @@ func Gather(index *PrestackIndex, selection GatherSelection) (GatherResult, erro
 // AdjacentGather navigates available real keys without inventing intermediate
 // IDs. It clamps at the first/last key; no wraparound surprise at endpoints.
 func (p *PrestackIndex) AdjacentGather(kind GatherType, current GatherKey, delta int) (GatherKey, bool) {
-	if p == nil || kind > GatherRaw {
+	if p == nil || kind > GatherAzimuth {
 		return GatherKey{}, false
 	}
 	if kind == GatherRaw {
@@ -632,6 +781,15 @@ func (p *PrestackIndex) AdjacentGather(kind GatherType, current GatherKey, delta
 		// There is exactly one raw-order selection; navigation is intentionally
 		// a no-op rather than inventing a neighboring gather.
 		return GatherKey{Raw: true}, true
+	}
+	if kind == GatherAzimuth {
+		keys := p.AvailableGathersAzimuthConfigured(DefaultAzimuthBinSize)
+		if len(keys) == 0 {
+			return GatherKey{}, false
+		}
+		at := sort.Search(len(keys), func(i int) bool { return !keyLess(keys[i], current) })
+		at = max(0, min(len(keys)-1, at+delta))
+		return keys[at], true
 	}
 	if kind == GatherOffset {
 		return p.AdjacentGatherConfigured(kind, current, delta, DefaultOffsetBinSize)
@@ -664,6 +822,67 @@ func (p *PrestackIndex) AdjacentGatherConfigured(kind GatherType, current Gather
 	return keys[at], true
 }
 
+// normalizeCMPBinConfig validates a CMP bin configuration and derives the
+// default left/bottom origin from finite midpoint records.  It returns false
+// when the size is disabled/invalid or no usable midpoint exists.
+func normalizeCMPBinConfig(p *PrestackIndex, cfg CMPBinConfig) (CMPBinConfig, bool) {
+	if p == nil || cfg.Size <= 0 || math.IsNaN(cfg.Size) || math.IsInf(cfg.Size, 0) {
+		return CMPBinConfig{}, false
+	}
+	if (cfg.OriginX == 0 && cfg.OriginY == 0) || math.IsNaN(cfg.OriginX) || math.IsInf(cfg.OriginX, 0) || math.IsNaN(cfg.OriginY) || math.IsInf(cfg.OriginY, 0) {
+		var bounds XYBounds
+		for _, r := range p.Records {
+			if r.HasMidpoint && finiteXY(r.MidpointX, r.MidpointY) {
+				bounds.add(r.MidpointX, r.MidpointY)
+			}
+		}
+		if !bounds.Valid {
+			return CMPBinConfig{}, false
+		}
+		cfg.OriginX, cfg.OriginY = bounds.XMin, bounds.YMin
+	}
+	return cfg, true
+}
+
+func cmpBinIndices(r PrestackTraceRecord, cfg CMPBinConfig) (int64, int64, bool) {
+	if !r.HasMidpoint || !finiteXY(r.MidpointX, r.MidpointY) {
+		return 0, 0, false
+	}
+	x := math.Floor((r.MidpointX - cfg.OriginX) / cfg.Size)
+	y := math.Floor((r.MidpointY - cfg.OriginY) / cfg.Size)
+	if math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(y) || math.IsInf(y, 0) ||
+		x > float64(math.MaxInt64) || x < float64(math.MinInt64) || y > float64(math.MaxInt64) || y < float64(math.MinInt64) {
+		return 0, 0, false
+	}
+	return int64(x), int64(y), true
+}
+
+func makeCMPBinKey(xIndex, yIndex int64, cfg CMPBinConfig) GatherKey {
+	return GatherKey{
+		CMPBin:        true,
+		CMPBinXIndex:  xIndex,
+		CMPBinYIndex:  yIndex,
+		CMPBinSize:    cfg.Size,
+		CMPBinOriginX: cfg.OriginX,
+		CMPBinOriginY: cfg.OriginY,
+		CMPBinCenterX: cfg.OriginX + (float64(xIndex)+0.5)*cfg.Size,
+		CMPBinCenterY: cfg.OriginY + (float64(yIndex)+0.5)*cfg.Size,
+	}
+}
+
+func normalizeCMPSelectionConfig(p *PrestackIndex, selection GatherSelection) (CMPBinConfig, bool) {
+	cfg := selection.CMPBin
+	if cfg.Size <= 0 || math.IsNaN(cfg.Size) || math.IsInf(cfg.Size, 0) {
+		cfg.Size = selection.Key.CMPBinSize
+	}
+	if cfg.OriginX == 0 && cfg.OriginY == 0 {
+		if selection.Key.CMPBinOriginX != 0 || selection.Key.CMPBinOriginY != 0 {
+			cfg.OriginX, cfg.OriginY = selection.Key.CMPBinOriginX, selection.Key.CMPBinOriginY
+		}
+	}
+	return normalizeCMPBinConfig(p, cfg)
+}
+
 func normalizeOffsetBinSize(width float64) float64 {
 	if width <= 0 || math.IsNaN(width) || math.IsInf(width, 0) {
 		return DefaultOffsetBinSize
@@ -671,8 +890,19 @@ func normalizeOffsetBinSize(width float64) float64 {
 	return width
 }
 
+func normalizeAzimuthBinSize(width float64) float64 {
+	if width <= 0 || math.IsNaN(width) || math.IsInf(width, 0) {
+		return DefaultAzimuthBinSize
+	}
+	return width
+}
+
 func validOffsetRecord(r PrestackTraceRecord) bool {
 	return r.HasOffset && !math.IsNaN(r.Offset) && !math.IsInf(r.Offset, 0)
+}
+
+func validAzimuthRecord(r PrestackTraceRecord) bool {
+	return r.HasAzimuth && !math.IsNaN(r.Azimuth) && !math.IsInf(r.Azimuth, 0)
 }
 
 func offsetBinIndex(offset, width float64) int64 {
@@ -683,4 +913,15 @@ func offsetBinKey(index int64, width float64) GatherKey {
 	center := float64(index) * width
 	half := width / 2
 	return GatherKey{OffsetBin: true, OffsetBinIndex: index, OffsetCenter: center, OffsetMin: center - half, OffsetMax: center + half}
+}
+
+func azimuthBinIndex(azimuth, width float64) int64 {
+	return int64(math.Floor(azimuth/width + 0.5))
+}
+
+func azimuthBinKey(index int64, width float64) GatherKey {
+	center := float64(index) * width
+	half := width / 2
+	return GatherKey{AzimuthBin: true, AzimuthBinIndex: index, AzimuthCenter: center,
+		AzimuthMin: center - half, AzimuthMax: center + half}
 }
