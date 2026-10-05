@@ -3,6 +3,7 @@ package prestack
 import (
 	"bytes"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/DavidLiu-code/SeisForge-Studio/internal/segy"
@@ -125,6 +126,25 @@ func TestSampleAxisCompatibilityAndFloatDifference(t *testing.T) {
 	}
 }
 
+func TestSampleAxisWindowCompatibilityAndNormalization(t *testing.T) {
+	a := SampleAxis{SampleCount: 8, SampleIntervalUS: 2000}
+	b := SampleAxis{SampleCount: 8, SampleIntervalUS: 2000}
+	wa, ok := NormalizeSampleWindow(-4, 99, a.SampleCount)
+	if !ok || wa != (SampleWindow{Start: 0, End: 7}) {
+		t.Fatalf("window normalization=%+v ok=%v", wa, ok)
+	}
+	if got := CompareSampleAxesWithWindows(a, b, SampleWindow{Start: 1, End: 4}, SampleWindow{Start: 1, End: 4}); !got.Compatible || !got.SampleWindowEqual {
+		t.Fatalf("equal sample windows unexpectedly incompatible: %+v", got)
+	}
+	got := CompareSampleAxesWithWindows(a, b, SampleWindow{Start: 1, End: 4}, SampleWindow{Start: 1, End: 5})
+	if got.Compatible || got.SampleWindowEqual || !strings.Contains(got.Reason, "sample window") {
+		t.Fatalf("window mismatch not detected: %+v", got)
+	}
+	if _, ok := NormalizeSampleWindow(5, 4, 8); ok {
+		t.Fatal("reversed sample window accepted")
+	}
+}
+
 func TestCompareMatchReportIsMetadataOnlyAndStable(t *testing.T) {
 	r := MatchRecords([]PrestackTraceRecord{matchRecord(1, 1, 2, 10, -20)}, []PrestackTraceRecord{matchRecord(9, 1, 2, 10, -20)})
 	axis := CompareSampleAxes(SampleAxis{SampleCount: 3, SampleIntervalUS: 2000}, SampleAxis{SampleCount: 3, SampleIntervalUS: 2000})
@@ -145,6 +165,43 @@ func TestCompareMatchReportIsMetadataOnlyAndStable(t *testing.T) {
 	r.Pairs[0].ATrace = 999
 	if report.Pairs[0].ATrace != 1 {
 		t.Fatal("report retained an unsafe pair alias")
+	}
+	if report.SchemaVersion != "1.1" || len(report.Rows) != 1 {
+		t.Fatalf("report schema/rows=%s/%d", report.SchemaVersion, len(report.Rows))
+	}
+	withOptions := BuildCompareMatchReportWithOptions(r, axis, CompareMatchReportOptions{APath: "a.sgy", BPath: "b.sgy", Selection: "CMP 10", SampleWindow: SampleWindow{Start: 2, End: 3}, IncludePairs: true})
+	jsonBytes, err := withOptions.JSON()
+	if err != nil || !bytes.Contains(jsonBytes, []byte("a.sgy")) || bytes.Contains(jsonBytes, []byte("amplitude")) || bytes.Contains(jsonBytes, []byte("samples")) {
+		t.Fatalf("provenance report=%s err=%v", jsonBytes, err)
+	}
+	if !bytes.Contains(jsonBytes, []byte("sample_window")) || !bytes.Contains(jsonBytes, []byte("matched")) {
+		t.Fatalf("report omitted window or summary: %s", jsonBytes)
+	}
+}
+
+func TestCompareMatchReportIncludesAllClassifications(t *testing.T) {
+	result := CompareMatchResult{
+		Strategy: MatchKeyMixed,
+		Pairs:    []TraceMatchPair{{ATrace: 1, BTrace: 9, Strategy: MatchKeyCDPOffset, Key: TraceMatchKey{Strategy: MatchKeyCDPOffset, CDP: 10, Offset: -20}}},
+		AOnly:    []int64{2}, BOnly: []int64{10},
+		AmbiguousA: []int64{3}, AmbiguousB: []int64{11},
+		InvalidA: []int64{4}, InvalidB: []int64{12},
+	}
+	report := BuildCompareMatchReportWithOptions(result, SampleAxisCompatibility{}, CompareMatchReportOptions{APath: "a.sgy", BPath: "b.sgy", IncludePairs: true})
+	if len(report.Rows) != 7 {
+		t.Fatalf("rows=%d, want 7", len(report.Rows))
+	}
+	var csvOut bytes.Buffer
+	if err := WriteCompareMatchReportCSV(&csvOut, report); err != nil {
+		t.Fatal(err)
+	}
+	for _, classification := range []string{"matched", "a_only", "b_only", "ambiguous_a", "ambiguous_b", "invalid_a", "invalid_b"} {
+		if !bytes.Contains(csvOut.Bytes(), []byte(classification)) {
+			t.Fatalf("CSV omitted classification %q: %s", classification, csvOut.String())
+		}
+	}
+	if bytes.Contains(csvOut.Bytes(), []byte("amplitude")) || bytes.Contains(csvOut.Bytes(), []byte("samples")) {
+		t.Fatalf("classification report contains sample data: %s", csvOut.String())
 	}
 }
 

@@ -3,13 +3,10 @@
 package main
 
 import (
-	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf16"
@@ -235,15 +232,6 @@ func exportPrestackQC() {
 	setPrestackStatus("QC 报告已导出：" + path)
 }
 
-type prestackCompareReport struct {
-	Version    string                               `json:"version"`
-	APath      string                               `json:"a_path"`
-	BPath      string                               `json:"b_path"`
-	Selection  string                               `json:"selection"`
-	Result     prestackcore.CompareMatchResult      `json:"result"`
-	SampleAxis prestackcore.SampleAxisCompatibility `json:"sample_axis"`
-}
-
 func savePrestackCompareReportDialog(owner uintptr, defaultName string) string {
 	buf := make([]uint16, 32768)
 	name := utf16.Encode([]rune(defaultName))
@@ -268,13 +256,16 @@ func exportPrestackCompareReport() {
 	if path == "" {
 		return
 	}
-	report := prestackCompareReport{Version: "1.10.3-prestack-compare-v1", APath: prestackState.dataset.Path,
-		BPath: prestackState.compareBDataset.Path, Selection: prestackSelectionKeyLabel(prestackState.selection),
-		Result: prestackState.compareBMatch.Clone(), SampleAxis: prestackState.compareBAxis}
+	report := prestackcore.BuildCompareMatchReportWithOptions(prestackState.compareBMatch.Clone(), prestackState.compareBAxis, prestackcore.CompareMatchReportOptions{
+		APath: prestackState.dataset.Path, BPath: prestackState.compareBDataset.Path,
+		Selection:    prestackSelectionKeyLabel(prestackState.selection),
+		SampleWindow: prestackcore.SampleWindow{Start: prestackState.sampleFirst, End: prestackState.sampleLast},
+		IncludePairs: true,
+	})
 	var err error
 	if strings.EqualFold(filepath.Ext(path), ".json") {
 		var data []byte
-		data, err = json.MarshalIndent(report, "", "  ")
+		data, err = report.JSON()
 		if err == nil {
 			err = os.WriteFile(path, data, 0o644)
 		}
@@ -283,19 +274,7 @@ func exportPrestackCompareReport() {
 		if createErr != nil {
 			err = createErr
 		} else {
-			w := csv.NewWriter(f)
-			err = w.Write([]string{"a_path", "b_path", "selection", "strategy", "a_trace", "b_trace", "key_strategy", "source_id", "receiver_id", "cdp", "offset"})
-			if err == nil {
-				for _, pair := range report.Result.Pairs {
-					if err = w.Write([]string{report.APath, report.BPath, report.Selection, report.Result.Strategy.String(), strconv.FormatInt(pair.ATrace, 10), strconv.FormatInt(pair.BTrace, 10), pair.Strategy.String(), strconv.FormatInt(int64(pair.Key.SourceID), 10), strconv.FormatInt(int64(pair.Key.ReceiverID), 10), strconv.FormatInt(int64(pair.Key.CDP), 10), strconv.FormatFloat(pair.Key.Offset, 'g', -1, 64)}); err != nil {
-						break
-					}
-				}
-			}
-			w.Flush()
-			if err == nil {
-				err = w.Error()
-			}
+			err = prestackcore.WriteCompareMatchReportCSV(f, report)
 			if closeErr := f.Close(); err == nil {
 				err = closeErr
 			}

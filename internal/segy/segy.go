@@ -1007,13 +1007,6 @@ func RenderTraceDifferencePairs(a, b *File, tracesA, tracesB []int64, o RenderOp
 	if a.Info.SampleIntervalUS != b.Info.SampleIntervalUS {
 		return nil, RenderStats{}, fmt.Errorf("A-B residual requires matching sample intervals (A=%d us, B=%d us)", a.Info.SampleIntervalUS, b.Info.SampleIntervalUS)
 	}
-	// A residual is a sample-for-sample operation.  Silently truncating to the
-	// shorter record (the former min(...) behavior) shifts the meaning of the
-	// last samples and can make an apparently valid delta hide an axis mismatch.
-	// Reject the pair instead; callers can still show A and B independently.
-	if a.Info.SamplesPerTrace != b.Info.SamplesPerTrace {
-		return nil, RenderStats{}, fmt.Errorf("A-B residual requires matching sample counts (A=%d, B=%d)", a.Info.SamplesPerTrace, b.Info.SamplesPerTrace)
-	}
 	if o.Width < 2 || o.Height < 2 {
 		return nil, RenderStats{}, errors.New("invalid image dimensions")
 	}
@@ -1211,4 +1204,18 @@ func RenderTraceDifferencePairs(a, b *File, tracesA, tracesB []int64, o RenderOp
 	st.TraceStart = tracesA[0]
 	st.TraceEnd = tracesA[len(tracesA)-1]
 	return pix, st, nil
+}
+
+// RenderTraceDifferencePairsStrict is the opt-in sample-axis-safe variant
+// used by prestack Compare. The historical RenderTraceDifferencePairs entry
+// point intentionally retains its previous truncation behavior for ordinary
+// 2D/3D Compare callers.
+func RenderTraceDifferencePairsStrict(a, b *File, tracesA, tracesB []int64, o RenderOptions) ([]byte, RenderStats, error) {
+	if a == nil || b == nil {
+		return nil, RenderStats{}, errors.New("nil SEG-Y file")
+	}
+	if a.Info.SamplesPerTrace != b.Info.SamplesPerTrace {
+		return nil, RenderStats{}, fmt.Errorf("A-B residual requires matching sample counts (A=%d, B=%d)", a.Info.SamplesPerTrace, b.Info.SamplesPerTrace)
+	}
+	return RenderTraceDifferencePairs(a, b, tracesA, tracesB, o)
 }

@@ -465,16 +465,47 @@ type SampleAxis struct {
 	HasTimeOrigin    bool
 }
 
+// SampleWindow is a zero-based inclusive sample interval used for a compare
+// operation.  It contains no sample values and is therefore safe to retain in
+// asynchronous tokens and metadata-only reports.
+type SampleWindow struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
 // SampleAxisCompatibility is metadata-only and suitable for a compare report.
 type SampleAxisCompatibility struct {
-	Compatible          bool       `json:"compatible"`
-	SampleIntervalEqual bool       `json:"sample_interval_equal"`
-	SampleCountEqual    bool       `json:"sample_count_equal"`
-	DelayEqual          bool       `json:"delay_equal"`
-	TimeOriginEqual     bool       `json:"time_origin_equal"`
-	A                   SampleAxis `json:"a"`
-	B                   SampleAxis `json:"b"`
-	Reason              string     `json:"reason,omitempty"`
+	Compatible          bool         `json:"compatible"`
+	SampleIntervalEqual bool         `json:"sample_interval_equal"`
+	SampleCountEqual    bool         `json:"sample_count_equal"`
+	DelayEqual          bool         `json:"delay_equal"`
+	TimeOriginEqual     bool         `json:"time_origin_equal"`
+	SampleWindowEqual   bool         `json:"sample_window_equal,omitempty"`
+	AWindow             SampleWindow `json:"a_window,omitempty"`
+	BWindow             SampleWindow `json:"b_window,omitempty"`
+	A                   SampleAxis   `json:"a"`
+	B                   SampleAxis   `json:"b"`
+	Reason              string       `json:"reason,omitempty"`
+}
+
+// NormalizeSampleWindow clamps an inclusive sample range to an axis.  It is
+// deliberately pure so UI code can validate text input before starting a
+// reader task.  A reversed or empty range is rejected instead of silently
+// changing the requested comparison window.
+func NormalizeSampleWindow(start, end, sampleCount int) (SampleWindow, bool) {
+	if sampleCount <= 0 {
+		return SampleWindow{}, false
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < 0 || end >= sampleCount {
+		end = sampleCount - 1
+	}
+	if start >= sampleCount || start > end {
+		return SampleWindow{}, false
+	}
+	return SampleWindow{Start: start, End: end}, true
 }
 
 func axisFrom(v any) (SampleAxis, bool) {
@@ -533,6 +564,33 @@ func CompareSampleAxes(a, b any) SampleAxisCompatibility {
 		r.Reason = strings.Join(parts, "; ")
 	}
 	return r
+}
+
+// CompareSampleAxesWithWindows extends CompareSampleAxes with the currently
+// selected sample ranges.  The ordinary CompareSampleAxes API remains
+// unchanged for callers that only have file/trace axis metadata.  A delta is
+// valid only when both axes and both requested windows are valid and equal.
+func CompareSampleAxesWithWindows(a, b any, aWindow, bWindow SampleWindow) SampleAxisCompatibility {
+	r := CompareSampleAxes(a, b)
+	r.AWindow, r.BWindow = aWindow, bWindow
+	aa, oka := axisFrom(a)
+	bb, okb := axisFrom(b)
+	validA := oka && aWindow.Start >= 0 && aWindow.End >= aWindow.Start && aWindow.End < aa.SampleCount
+	validB := okb && bWindow.Start >= 0 && bWindow.End >= bWindow.Start && bWindow.End < bb.SampleCount
+	r.SampleWindowEqual = validA && validB && aWindow == bWindow
+	if !r.SampleWindowEqual {
+		if r.Reason == "" {
+			r.Reason = "sample window mismatch"
+		} else {
+			r.Reason += "; sample window mismatch"
+		}
+		r.Compatible = false
+	}
+	return r
+}
+
+func CheckSampleAxisCompatibilityWithWindows(a, b any, aWindow, bWindow SampleWindow) SampleAxisCompatibility {
+	return CompareSampleAxesWithWindows(a, b, aWindow, bWindow)
 }
 
 func CheckSampleAxisCompatibility(a, b any) SampleAxisCompatibility {

@@ -521,7 +521,7 @@ func TestRenderTraceDifferencePairs(t *testing.T) {
 	}
 }
 
-func TestRenderTraceDifferencePairsRejectsSampleCountMismatch(t *testing.T) {
+func TestRenderTraceDifferencePairsKeepsLegacySampleCountSemantics(t *testing.T) {
 	dir := t.TempDir()
 	makeFile := func(path string, samples int) {
 		f, err := os.Create(path)
@@ -559,8 +559,11 @@ func TestRenderTraceDifferencePairsRejectsSampleCountMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	if _, _, err := RenderTraceDifferencePairs(a, b, []int64{0}, []int64{0}, RenderOptions{Width: 8, Height: 8, SampleStart: 0, SampleEnd: 3}); err == nil {
-		t.Fatal("sample-count mismatch was silently truncated")
+	if _, _, err := RenderTraceDifferencePairs(a, b, []int64{0}, []int64{0}, RenderOptions{Width: 8, Height: 8, SampleStart: 0, SampleEnd: 3}); err != nil {
+		t.Fatalf("legacy renderer changed sample-count behavior: %v", err)
+	}
+	if _, _, err := RenderTraceDifferencePairsStrict(a, b, []int64{0}, []int64{0}, RenderOptions{Width: 8, Height: 8, SampleStart: 0, SampleEnd: 3}); err == nil {
+		t.Fatal("strict renderer accepted sample-count mismatch")
 	}
 }
 
