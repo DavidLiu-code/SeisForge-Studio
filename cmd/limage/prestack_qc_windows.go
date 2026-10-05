@@ -256,11 +256,17 @@ func exportPrestackCompareReport() {
 	if path == "" {
 		return
 	}
+	aTraceIndices := append([]int64(nil), prestackState.gather.TraceIndices...)
+	bGather := rGatherForSelection(prestackState.compareBIndex, prestackState.selection)
 	report := prestackcore.BuildCompareMatchReportWithOptions(prestackState.compareBMatch.Clone(), prestackState.compareBAxis, prestackcore.CompareMatchReportOptions{
 		APath: prestackState.dataset.Path, BPath: prestackState.compareBDataset.Path,
 		Selection:    prestackSelectionKeyLabel(prestackState.selection),
+		Primary:      prestackGatherKindLabel(prestackState.selection.Type),
+		Secondary:    prestackSecondaryLabel(prestackState.selection),
 		SampleWindow: prestackcore.SampleWindow{Start: prestackState.sampleFirst, End: prestackState.sampleLast},
 		IncludePairs: true,
+		ARecords:     prestackCompareRecords(prestackState.index, aTraceIndices),
+		BRecords:     prestackCompareRecords(prestackState.compareBIndex, bGather.TraceIndices),
 	})
 	var err error
 	if strings.EqualFold(filepath.Ext(path), ".json") {

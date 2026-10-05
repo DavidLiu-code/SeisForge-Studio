@@ -91,6 +91,9 @@ type CompareMatchResult struct {
 	Matched    int              `json:"matched"`
 	Ambiguous  int              `json:"ambiguous"`
 	Invalid    int              `json:"invalid"`
+	// Reason explains why no pair was produced or why one side is unavailable.
+	// It contains metadata only and is safe to surface in the Compare UI.
+	Reason string `json:"reason,omitempty"`
 }
 
 func (r CompareMatchResult) String() string {
@@ -261,6 +264,11 @@ type idCoordinate struct{ x, y float64 }
 // disable the stable ID key for every otherwise-good source in the file.
 func idConflicts(records []PrestackTraceRecord, source bool) map[int32]bool {
 	seen := make(map[int32]idCoordinate)
+	// A stable ID is only safe when every occurrence has a usable coordinate
+	// whenever at least one occurrence carries coordinates.  Keeping this
+	// separate from seen lets us detect a missing coordinate regardless of
+	// whether the malformed record appears before or after the valid one.
+	missing := make(map[int32]bool)
 	conflicts := make(map[int32]bool)
 	for _, r := range records {
 		var id int32
@@ -271,16 +279,28 @@ func idConflicts(records []PrestackTraceRecord, source bool) map[int32]bool {
 		} else {
 			id, ok, x, y = r.ReceiverID, r.HasReceiver, r.ReceiverX, r.ReceiverY
 		}
-		if id == 0 || !ok || !finiteMatch(x) || !finiteMatch(y) {
+		if id == 0 {
+			continue
+		}
+		if !ok || !finiteMatch(x) || !finiteMatch(y) {
+			missing[id] = true
 			continue
 		}
 		x, _ = normalizeCoordinate(x)
 		y, _ = normalizeCoordinate(y)
+		if missing[id] {
+			conflicts[id] = true
+		}
 		if old, exists := seen[id]; exists && (old.x != x || old.y != y) {
 			conflicts[id] = true
 			continue
 		}
 		seen[id] = idCoordinate{x: x, y: y}
+	}
+	for id := range missing {
+		if _, ok := seen[id]; ok {
+			conflicts[id] = true
+		}
 	}
 	return conflicts
 }
@@ -451,6 +471,18 @@ func matchRecords(a, b []PrestackTraceRecord) CompareMatchResult {
 	result.Matched = len(result.Pairs)
 	result.Ambiguous = len(result.AmbiguousA) + len(result.AmbiguousB)
 	result.Invalid = len(result.InvalidA) + len(result.InvalidB)
+	switch {
+	case len(a) == 0 && len(b) > 0:
+		result.Reason = "A 当前道集为空"
+	case len(b) == 0 && len(a) > 0:
+		result.Reason = "B 当前道集不可用或为空"
+	case len(result.Pairs) == 0 && (len(a) > 0 || len(b) > 0):
+		if result.Invalid == len(a)+len(b) {
+			result.Reason = "没有可用于匹配的有效道头"
+		} else {
+			result.Reason = "当前道集无匹配道"
+		}
+	}
 	return result
 }
 
