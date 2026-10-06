@@ -66,6 +66,15 @@ const (
 	IDPRESTACK_EXPORT_GATHER
 	IDPRESTACK_EXPORT_CSV
 	IDPRESTACK_MULTI_APPLY
+	IDPRESTACK_COMPARE_OPEN_B
+	IDPRESTACK_COMPARE_CLOSE_B
+	IDPRESTACK_COMPARE_EXPORT
+	IDPRESTACK_MAPPING_TARGET
+	IDPRESTACK_COMPARE_FILTER_MATCHED
+	IDPRESTACK_COMPARE_FILTER_AONLY
+	IDPRESTACK_COMPARE_FILTER_BONLY
+	IDPRESTACK_COMPARE_FILTER_AMBIGUOUS
+	IDPRESTACK_COMPARE_FILTER_INVALID
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -79,9 +88,11 @@ const (
 	WM_PRESTACK_RESIZE_FLUSH = WM_USER + 613
 	// Post selection work so key-list rebuilding/render planning starts after
 	// the native control has completed its notification transaction.
-	WM_PRESTACK_COMBO_COMMIT = WM_USER + 614
-	WM_TIMER                 = 0x0113
-	prestackCtrlClickTimer   = 1
+	WM_PRESTACK_COMBO_COMMIT    = WM_USER + 614
+	WM_PRESTACK_COMPARE_B_READY = WM_USER + 617
+	WM_PRESTACK_COMPARE_RENDER  = WM_USER + 618
+	WM_TIMER                    = 0x0113
+	prestackCtrlClickTimer      = 1
 	// Mouse capture belongs to the scene only while a drag is active.  A
 	// native combo box takes capture while its drop list is open; without
 	// clearing our scene state when that happens, subsequent clicks are still
@@ -107,6 +118,9 @@ const (
 type prestackControls struct {
 	home, open, path, tabs, status, progress, progressLabel                                       uintptr
 	qcExport, exportGather, exportCSV                                                             uintptr
+	compareOpenB, compareCloseB, compareExport                                                    uintptr
+	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly            uintptr
+	compareFilterAmbiguous, compareFilterInvalid                                                  uintptr
 	kind, key, prev, next, sortLabel, sort, axis, display, wiggleDecimLabel, wiggleDecim, palette uintptr
 	offsetBinLabel, offsetBin, offsetBinApply                                                     uintptr
 	cmpBinLabel, cmpBin, cmpBinApply                                                              uintptr
@@ -141,6 +155,8 @@ type prestackSession struct {
 	workspaceGeneration                                 uint64
 	datasetGeneration, selectionGeneration, ownerToken  int64
 	indexGeneration, renderGeneration, exportGeneration int64
+	mappingGeneration, compareBMappingGeneration        int64
+	compareModeGeneration, compareDisplayGeneration     int64
 	resizeGeneration                                    int64
 	indexCancel, renderCancel, exportCancel             context.CancelFunc
 	loading, rendering, needsIndex, progressDone        bool
@@ -174,6 +190,28 @@ type prestackSession struct {
 	pendingCtrlX, pendingCtrlY                           int
 	pendingCtrlGeneration                                uint64
 	pendingCtrlValid                                     bool
+	// Compare B is intentionally independent from A. Its dataset/index are
+	// metadata-only and are never used to mutate A's gather or renderer.
+	compareBDataset                               *dataset.SeismicDataset
+	compareBIndex                                 *prestackcore.PrestackIndex
+	compareBMapping                               prestackcore.HeaderMapping
+	compareBGeneration, compareBDatasetGeneration int64
+	compareBCancel                                context.CancelFunc
+	compareBLoading                               bool
+	compareBError                                 string
+	compareBMatch                                 prestackcore.CompareMatchResult
+	compareBAxis                                  prestackcore.SampleAxisCompatibility
+	compareRenderCancel                           context.CancelFunc
+	compareRenderGeneration                       int64
+	compareRendering                              bool
+	compareA, compareB, compareDelta              []byte
+	compareWidth, compareHeight                   int
+	compareViewFirst, compareViewLast             int
+	compareViewSampleFirst, compareViewSampleLast int
+	compareDragPanel                              int
+	compareFilterMask                             uint32
+	compareRows, compareDisplayRows               []prestackcore.CompareLogicalRow
+	mappingTargetB                                bool
 }
 
 // Workers capture this identity on the UI thread and never read mutable
@@ -192,6 +230,29 @@ type prestackIndexResult struct {
 	detection  prestackcore.MappingDetection
 	detected   bool
 	err        error
+}
+type prestackCompareBResult struct {
+	generation, datasetGeneration, bDatasetGeneration, selectionGeneration, mappingGeneration int64
+	compareModeGeneration                                                                     int64
+	workspaceGeneration                                                                       uint64
+	ownerToken                                                                                int64
+	owner                                                                                     uintptr
+	dataset                                                                                   *dataset.SeismicDataset
+	index                                                                                     *prestackcore.PrestackIndex
+	mapping                                                                                   prestackcore.HeaderMapping
+	err                                                                                       error
+}
+type prestackCompareRenderResult struct {
+	generation, datasetGeneration, bDatasetGeneration, selectionGeneration, aMappingGeneration int64
+	bGeneration, bMappingGeneration, compareModeGeneration, displayGeneration                  int64
+	resizeGeneration, sampleFirst, sampleLast                                                  int64
+	workspaceGeneration                                                                        uint64
+	owner, ownerToken                                                                          int64
+	comparePage                                                                                int
+	width, height                                                                              int
+	palette                                                                                    int
+	a, b, delta                                                                                []byte
+	err, bErr                                                                                  error
 }
 type prestackRenderResult struct {
 	token               prestackAsyncToken
@@ -225,6 +286,8 @@ var (
 	prestackDeliveryIndexGeneration, prestackDeliveryRenderGeneration int64
 	prestackPendingIndex                                              *prestackIndexResult
 	prestackPendingRender                                             *prestackRenderResult
+	prestackPendingCompareB                                           *prestackCompareBResult
+	prestackPendingCompareRender                                      *prestackCompareRenderResult
 	prestackExportDone                                                = make(chan prestackExportResult, 4)
 	prestackProgress                                                  int64
 	prestackRenderSlot                                                = make(chan struct{}, 1)
@@ -250,6 +313,9 @@ func (*prestackWorkspaceAdapter) Open(r workspacecore.OpenRequest) error {
 		datasetGeneration: atomic.AddInt64(&prestackGeneration, 1), ownerToken: prestackOwnerToken,
 		workspaceGeneration: r.Generation, sampleLast: r.Dataset.Metadata.SamplesPerTrace - 1,
 		mapLayers: [5]bool{true, true, true, true, true}}
+	prestackState.mappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareModeGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.selectedBinIndex = -1
 	prestackState.pendingCtrlTrace = -1
 	prestackState.sampleFirst, prestackState.sampleLast = int(r.EffectiveSampleRange().Start), int(r.EffectiveSampleRange().End)
@@ -538,6 +604,22 @@ func createPrestackControls() {
 	u.qcExport = prestackButton(IDPRESTACK_QC_EXPORT, "导出 QC 报告")
 	u.exportGather = prestackButton(IDPRESTACK_EXPORT_GATHER, "导出道集")
 	u.exportCSV = prestackButton(IDPRESTACK_EXPORT_CSV, "导出清单")
+	u.compareOpenB = prestackButton(IDPRESTACK_COMPARE_OPEN_B, "加载 B")
+	u.compareCloseB = prestackButton(IDPRESTACK_COMPARE_CLOSE_B, "关闭 B")
+	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出匹配报告")
+	u.compareMappingTarget = prestackCombo(IDPRESTACK_MAPPING_TARGET, []string{"映射目标：A", "映射目标：B"})
+	u.compareFilterMatched = createCtrl(prestackHwnd, "BUTTON", "匹配", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 62, 24, IDPRESTACK_COMPARE_FILTER_MATCHED)
+	u.compareFilterAOnly = createCtrl(prestackHwnd, "BUTTON", "A-only", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 62, 24, IDPRESTACK_COMPARE_FILTER_AONLY)
+	u.compareFilterBOnly = createCtrl(prestackHwnd, "BUTTON", "B-only", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 62, 24, IDPRESTACK_COMPARE_FILTER_BONLY)
+	u.compareFilterAmbiguous = createCtrl(prestackHwnd, "BUTTON", "歧义", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 62, 24, IDPRESTACK_COMPARE_FILTER_AMBIGUOUS)
+	u.compareFilterInvalid = createCtrl(prestackHwnd, "BUTTON", "无效", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 62, 24, IDPRESTACK_COMPARE_FILTER_INVALID)
+	prestackState.compareFilterMask = 1 | 2 // matched + A-only keep the A panel useful by default.
+	for _, c := range []uintptr{u.compareFilterMatched, u.compareFilterAOnly, u.compareFilterBOnly, u.compareFilterAmbiguous, u.compareFilterInvalid} {
+		pSendMessageW.Call(c, BM_SETCHECK, 0, 0)
+	}
+	pSendMessageW.Call(u.compareFilterMatched, BM_SETCHECK, BST_CHECKED, 0)
+	pSendMessageW.Call(u.compareFilterAOnly, BM_SETCHECK, BST_CHECKED, 0)
+	pSendMessageW.Call(u.compareMappingTarget, CB_SETCURSEL, 0, 0)
 	configurePrestackKeyCombo()
 	for i, f := range prestackMappingFields(&prestackState.mapping) {
 		u.mappingLabels = append(u.mappingLabels, createCtrl(prestackHwnd, "STATIC", f.label+" byte", WS_CHILD, 0, 0, 190, 22, 0))
@@ -557,8 +639,15 @@ func prestackMappingFields(m *prestackcore.HeaderMapping) []prestackMappingField
 		{"CDP X", &m.CDPXByte}, {"CDP Y", &m.CDPYByte}, {"Inline", &m.InlineByte}, {"Crossline", &m.CrosslineByte}, {"Coordinate scalar", &m.ScalarByte}, {"Coordinate units", &m.UnitsByte}}
 }
 func populatePrestackMapping() {
-	for i, f := range prestackMappingFields(&prestackState.mapping) {
+	m := &prestackState.mapping
+	if prestackState.mappingTargetB {
+		m = &prestackState.compareBMapping
+	}
+	for i, f := range prestackMappingFields(m) {
 		setText(prestackUI.mappingEdits[i], strconv.Itoa(*f.value))
+	}
+	if prestackUI.compareMappingTarget != 0 {
+		pSendMessageW.Call(prestackUI.compareMappingTarget, CB_SETCURSEL, map[bool]uintptr{true: 1, false: 0}[prestackState.mappingTargetB], 0)
 	}
 }
 func resetPrestackControls() {
@@ -573,6 +662,8 @@ func resetPrestackControls() {
 	prestackState.offsetBinSize = prestackcore.DefaultOffsetBinSize
 	prestackState.selection.OffsetBinSize = prestackState.offsetBinSize
 	prestackState.selection.Keys = nil
+	prestackState.compareViewFirst, prestackState.compareViewLast = 0, -1
+	prestackState.compareFilterMask = 1 | 2
 	setText(prestackUI.multiEdit, "")
 	setText(prestackUI.offsetBin, formatPrestackOffsetBin(prestackState.offsetBinSize))
 	prestackState.cmpBinSize = 0
@@ -826,8 +917,16 @@ func applyPrestackRawRange() {
 	startPrestackRender()
 }
 func setPrestackPage(page int) {
+	oldPage := prestackState.page
 	if page != prestackState.page {
 		prestackClearLink()
+		prestackState.compareModeGeneration = atomic.AddInt64(&prestackGeneration, 1)
+		if oldPage == 3 && page != 3 {
+			// Leaving Compare must stop the worker immediately.  The result is
+			// additionally guarded by compareModeGeneration/page, but cancelling
+			// here avoids keeping two SEG-Y readers busy after a tab switch.
+			clearPrestackCompareRender()
+		}
 	}
 	prestackState.page = page
 	if page != 0 {
@@ -839,6 +938,9 @@ func setPrestackPage(page int) {
 	layoutPrestackControls()
 	if page == 0 && prestackState.index != nil && len(prestackState.indices) == 0 && !prestackState.rendering && !prestackState.resizeActive && !prestackState.resizePending && !prestackState.suppressPageRender {
 		startPrestackRender()
+	}
+	if page == 3 && prestackState.index != nil {
+		startPrestackCompareRender()
 	}
 	invalidatePrestackScene()
 	redrawPrestackWholeClient()
@@ -958,41 +1060,58 @@ func layoutPrestackControls() {
 			place(c, 0, 0, 1, 1, false)
 		}
 		// First row: gather type, navigation, key, sort and horizontal axis.
+		// At the minimum restored width the optional bin controls must still fit
+		// inside the client.  Use a compact two-row variant instead of allowing
+		// the last controls to spill into the non-client area (which also caused
+		// stale pixels to appear after a resize).
+		compact := w < 1280
+		kindW, prevW, keyW, nextW := 150, 64, 190, 64
+		sortLabelW, sortW, axisW := 42, 124, 110
+		multiLabelW, multiEditW, multiApplyW := 50, 150, 76
+		if compact {
+			kindW, prevW, keyW, nextW = 130, 56, 145, 56
+			sortLabelW, sortW, axisW = 34, 96, 90
+			multiLabelW, multiEditW, multiApplyW = 40, 100, 70
+		}
 		x, y = 10, 76
-		place(u.kind, x, y, 150, 24, g)
-		x += 156
-		place(u.prev, x, y, 64, 25, g)
-		x += 70
-		place(u.key, x, y, 190, 24, g)
-		x += 196
-		place(u.next, x, y, 64, 25, g)
-		x += 70
-		place(u.sortLabel, x, y+2, 42, 22, g)
-		x += 46
-		place(u.sort, x, y, 124, 24, g)
-		x += 130
-		place(u.axis, x, y, 110, 24, g)
-		x += 116
+		place(u.kind, x, y, kindW, 24, g)
+		x += kindW + 6
+		place(u.prev, x, y, prevW, 25, g)
+		x += prevW + 6
+		place(u.key, x, y, keyW, 24, g)
+		x += keyW + 6
+		place(u.next, x, y, nextW, 25, g)
+		x += nextW + 6
+		place(u.sortLabel, x, y+2, sortLabelW, 22, g)
+		x += sortLabelW + 4
+		place(u.sort, x, y, sortW, 24, g)
+		x += sortW + 4
+		place(u.axis, x, y, axisW, 24, g)
+		x += axisW + 4
 		// The multi-bin command stays on the first row so it is available for
 		// every keyed gather without creating a third toolbar row.  Keep a
 		// small gap around the edit so the text (notably "20") never touches a
 		// neighboring border.
-		place(u.multiLabel, x, y+2, 50, 22, g)
-		x += 54
-		place(u.multiEdit, x, y, 150, 24, g)
-		x += 154
-		place(u.multiApply, x, y, 76, 24, g)
-		x += 84
+		place(u.multiLabel, x, y+2, multiLabelW, 22, g)
+		x += multiLabelW + 4
+		place(u.multiEdit, x, y, multiEditW, 24, g)
+		x += multiEditW + 4
+		place(u.multiApply, x, y, multiApplyW, 24, g)
+		x += multiApplyW + 8
 		isCMP := g && prestackState.selection.Type == prestackcore.GatherCMP
 		isOffset := g && prestackState.selection.Type == prestackcore.GatherOffset
-		place(u.cmpBinLabel, x, y+2, 62, 22, isCMP)
-		x += 66
-		place(u.cmpBin, x, y, 68, 24, isCMP)
-		x += 74
-		place(u.cmpBinApply, x, y, 76, 24, isCMP)
-		place(u.offsetBinLabel, x, y+2, 68, 22, isOffset)
-		place(u.offsetBin, x+72, y, 72, 24, isOffset)
-		place(u.offsetBinApply, x+150, y, 74, 24, isOffset)
+		binLabelW, binEditW, binApplyW := 62, 68, 76
+		if compact {
+			binLabelW, binEditW, binApplyW = 52, 58, 68
+		}
+		place(u.cmpBinLabel, x, y+2, binLabelW, 22, isCMP)
+		x += binLabelW + 4
+		place(u.cmpBin, x, y, binEditW, 24, isCMP)
+		x += binEditW + 4
+		place(u.cmpBinApply, x, y, binApplyW, 24, isCMP)
+		place(u.offsetBinLabel, x-binLabelW-binEditW-8, y+2, binLabelW, 22, isOffset)
+		place(u.offsetBin, x-binEditW-4, y, binEditW, 24, isOffset)
+		place(u.offsetBinApply, x, y, binApplyW, 24, isOffset)
 		// Second row: display, reset, headers, palette, gain and AGC.
 		x, y = 10, 107
 		place(u.display, x, y, 112, 24, g)
@@ -1025,6 +1144,14 @@ func layoutPrestackControls() {
 	}
 	place(u.mapReset, 565, 76, 94, 25, m)
 	mapPage := prestackState.page == 2
+	place(u.compareMappingTarget, 18, 76, 150, 24, mapPage)
+	if u.compareMappingTarget != 0 {
+		enabled := uintptr(0)
+		if mapPage && prestackState.compareBDataset != nil {
+			enabled = 1
+		}
+		pEnableWindow.Call(u.compareMappingTarget, enabled)
+	}
 	for i := range u.mappingEdits {
 		col, row := i/7, i%7
 		xx := 18 + col*300
@@ -1036,18 +1163,23 @@ func layoutPrestackControls() {
 	place(u.mappingApply, 130, 311, 205, 27, mapPage)
 	place(u.mappingText, 18, 349, w-36, h-389, mapPage)
 	place(u.qcExport, 18, 78, 130, 27, prestackState.page == 4)
+	comparePage := prestackState.page == 3
+	place(u.compareOpenB, 18, 78, 92, 27, comparePage)
+	place(u.compareCloseB, 116, 78, 92, 27, comparePage && prestackState.compareBDataset != nil)
+	place(u.compareExport, 214, 78, 145, 27, comparePage && prestackState.compareBDataset != nil)
+	place(u.compareFilterMatched, 370, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
+	place(u.compareFilterAOnly, 436, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
+	place(u.compareFilterBOnly, 502, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
+	place(u.compareFilterAmbiguous, 568, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
+	place(u.compareFilterInvalid, 634, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
 }
 func prestackSceneRect() RECT {
 	r := clientRect(prestackHwnd)
-	top := int32(119)
-	if prestackState.page == 0 {
-		// Gather and raw file-order modes both use exactly two toolbar rows.
-		// Keep the scene anchor stable on narrow windows as well; wrapping the
-		// hidden/key controls used to push this down to a third row and made the
-		// raw mode appear to have a different layout.
-		top = 156
-	}
-	return RECT{Left: 62, Top: top, Right: maxInt32(63, r.Right-24), Bottom: maxInt32(top+1, r.Bottom-62)}
+	// Gather and raw file-order modes both use exactly two toolbar rows. Keep
+	// this in the same pure layout contract used by QC and page painting so a
+	// resize cannot leave an old frame under the footer or toolbar.
+	l := prestackPanelLayoutForSize(int(r.Right), int(r.Bottom), prestackState.page)
+	return prestackLayoutRECT(l.Scene)
 }
 func maxInt32(a, b int32) int32 {
 	if a > b {
@@ -1388,8 +1520,13 @@ func commitPrestackCombo(id int) {
 			return
 		}
 		prestackState.display = int(v)
+		prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+		clearPrestackCompareRender()
 		layoutPrestackControls()
 		startPrestackRender()
+		if prestackState.page == 3 && prestackState.compareBDataset != nil {
+			startPrestackCompareRender()
+		}
 	case IDPRESTACK_WIGGLE_DECIM:
 		v, _, _ := pSendMessageW.Call(prestackUI.wiggleDecim, CB_GETCURSEL, 0, 0)
 		factor := prestackWiggleDecimationValue(int(v))
@@ -1397,8 +1534,13 @@ func commitPrestackCombo(id int) {
 			return
 		}
 		prestackState.wiggleDecimation = factor
+		prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+		clearPrestackCompareRender()
 		if prestackState.display == 1 {
 			startPrestackRender()
+		}
+		if prestackState.page == 3 && prestackState.compareBDataset != nil {
+			startPrestackCompareRender()
 		}
 	case IDPRESTACK_PALETTE:
 		v, _, _ := pSendMessageW.Call(prestackUI.palette, CB_GETCURSEL, 0, 0)
@@ -1406,8 +1548,13 @@ func commitPrestackCombo(id int) {
 			return
 		}
 		prestackState.palette = int(v)
+		prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+		clearPrestackCompareRender()
 		prestackState.bgra = crookedPaletteBGRA(prestackState.indices, int(v))
 		invalidatePrestackScene()
+		if prestackState.page == 3 && prestackState.compareBDataset != nil {
+			startPrestackCompareRender()
+		}
 	}
 }
 
@@ -1439,6 +1586,10 @@ func setPrestackProgress(done bool, label string) {
 }
 
 func cancelPrestackJobs() {
+	if prestackState.compareBCancel != nil {
+		prestackState.compareBCancel()
+		prestackState.compareBCancel = nil
+	}
 	if prestackState.indexCancel != nil {
 		prestackState.indexCancel()
 		prestackState.indexCancel = nil
@@ -1451,22 +1602,41 @@ func cancelPrestackJobs() {
 		prestackState.exportCancel()
 		prestackState.exportCancel = nil
 	}
+	if prestackState.compareRenderCancel != nil {
+		prestackState.compareRenderCancel()
+		prestackState.compareRenderCancel = nil
+	}
 	prestackState.indexGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.renderGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.exportGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBMappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareModeGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareRenderGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	prestackState.loading, prestackState.rendering = false, false
+	prestackState.compareBLoading = false
 	prestackDeliveryMu.Lock()
 	prestackDeliveryIndexGeneration = prestackState.indexGeneration
 	prestackDeliveryRenderGeneration = prestackState.renderGeneration
 	prestackPendingIndex = nil
 	prestackPendingRender = nil
+	prestackPendingCompareB = nil
+	prestackPendingCompareRender = nil
 	prestackDeliveryMu.Unlock()
+	prestackState.compareRendering = false
+	prestackState.compareA, prestackState.compareB, prestackState.compareDelta = nil, nil, nil
+	prestackState.compareWidth, prestackState.compareHeight = 0, 0
+	prestackState.compareRows, prestackState.compareDisplayRows = nil, nil
 }
 func startPrestackIndex(detect bool) {
 	if prestackState.dataset == nil {
 		return
 	}
 	cancelPrestackJobs()
+	// Rebuilding A's index also establishes a new mapping snapshot.  Keep this
+	// generation separate from selectionGeneration so an old Compare B result
+	// cannot be paired with records decoded using a newer header mapping.
+	prestackState.mappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	prestackState.indexCancel = cancel
 	gen := atomic.AddInt64(&prestackGeneration, 1)
@@ -1559,6 +1729,7 @@ func receivePrestackIndex(gen int64) {
 	if r.detected {
 		prestackState.detection = r.detection
 		prestackState.mapping = r.detection.Mapping
+		prestackState.mappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
 		populatePrestackMapping()
 	}
 	var summary strings.Builder
@@ -1591,6 +1762,13 @@ func receivePrestackIndex(gen int64) {
 }
 func applyPrestackMapping() {
 	m := prestackState.mapping
+	if prestackState.mappingTargetB {
+		if prestackState.compareBDataset == nil {
+			message(prestackHwnd, "B 道头映射", "请先在 Compare 页面加载 B 文件。", MB_OK|MB_ICONINFORMATION)
+			return
+		}
+		m = prestackState.compareBMapping
+	}
 	for i, f := range prestackMappingFields(&m) {
 		v, e := strconv.Atoi(strings.TrimSpace(getText(prestackUI.mappingEdits[i])))
 		if e != nil {
@@ -1603,7 +1781,27 @@ func applyPrestackMapping() {
 		message(prestackHwnd, "道头映射", e.Error(), MB_OK|MB_ICONERROR)
 		return
 	}
+	if prestackState.mappingTargetB {
+		prestackState.compareBMapping = m
+		prestackState.compareBMappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
+		path := ""
+		if prestackState.compareBDataset != nil {
+			path = prestackState.compareBDataset.Path
+		}
+		cancelPrestackCompareB()
+		if path != "" {
+			startPrestackCompareBWithMapping(path, &m)
+		}
+		return
+	}
 	prestackState.mapping = m
+	prestackState.mappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	// A mapping revision invalidates every A/B match.  Keep the A rebuild
+	// independent and require B to be loaded again, rather than briefly pairing
+	// records indexed with different header semantics.
+	if prestackState.compareBDataset != nil || prestackState.compareBLoading {
+		cancelPrestackCompareB()
+	}
 	startPrestackIndex(false)
 }
 
@@ -1883,6 +2081,185 @@ func applyPrestackGatherSelection() {
 	prestackState.imageWidth = 0
 	prestackState.imageHeight = 0
 	startPrestackRender()
+	if prestackState.compareBDataset != nil {
+		refreshPrestackCompareMatch()
+	}
+}
+
+// startPrestackCompareB loads a second dataset/index without touching A's
+// reader, gather, mapping or render generations.  The worker owns a short
+// lived SEG-Y reader only while building the metadata index; no amplitude
+// samples are copied or retained.
+func startPrestackCompareB(path string) {
+	startPrestackCompareBWithMapping(path, nil)
+}
+
+// startPrestackCompareBWithMapping is the B-only rebuild entry point used by
+// the Mapping page.  A nil mapping means a fresh B load and copies A's current
+// mapping; a non-nil mapping is an explicit B mapping revision.
+func startPrestackCompareBWithMapping(path string, requested *prestackcore.HeaderMapping) {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" || prestackState.dataset == nil {
+		return
+	}
+	if strings.EqualFold(filepath.Clean(path), filepath.Clean(prestackState.dataset.Path)) {
+		message(prestackHwnd, "叠前 A/B", "A 与 B 不能使用同一个 SEG-Y 文件。", MB_OK|MB_ICONINFORMATION)
+		return
+	}
+	if prestackState.compareBCancel != nil {
+		prestackState.compareBCancel()
+		prestackState.compareBCancel = nil
+	}
+	// A replacement B must not leave the previous A/B/Δ frame visible while
+	// its metadata index is being built. Keep A's gather untouched, but clear
+	// only the compare exchange buffers and their pending generation.
+	clearPrestackCompareRender()
+	ctx, cancel := context.WithCancel(context.Background())
+	prestackState.compareBCancel = cancel
+	gen := atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBGeneration = gen
+	prestackState.compareBDatasetGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBMappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareModeGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBLoading = true
+	prestackState.compareBError = ""
+	prestackState.compareBDataset = nil
+	prestackState.compareBIndex = nil
+	prestackState.compareBMatch = prestackcore.CompareMatchResult{}
+	prestackState.compareBAxis = prestackcore.SampleAxisCompatibility{}
+	if requested != nil {
+		prestackState.compareBMapping = *requested
+	} else {
+		prestackState.compareBMapping = prestackState.mapping
+	}
+	owner, ownerToken := prestackHwnd, prestackState.ownerToken
+	mapping := prestackState.compareBMapping
+	workspaceGeneration := prestackState.workspaceGeneration
+	datasetGeneration := prestackState.datasetGeneration
+	selectionGeneration := prestackState.selectionGeneration
+	bDatasetGeneration := prestackState.compareBDatasetGeneration
+	mappingGeneration := prestackState.compareBMappingGeneration
+	compareModeGeneration := prestackState.compareModeGeneration
+	setPrestackStatus("正在加载 B：" + filepath.Base(path) + "（仅扫描道头）")
+	layoutPrestackControls()
+	redrawPrestackWholeClient()
+	go func() {
+		result := &prestackCompareBResult{generation: gen, datasetGeneration: datasetGeneration, bDatasetGeneration: bDatasetGeneration, selectionGeneration: selectionGeneration, mappingGeneration: mappingGeneration, compareModeGeneration: compareModeGeneration, workspaceGeneration: workspaceGeneration, ownerToken: ownerToken, owner: owner, mapping: mapping}
+		manager := dataset.NewManager()
+		data, err := manager.Open(path)
+		if err != nil {
+			result.err = err
+		} else {
+			result.dataset = data
+			reader, openErr := data.OpenReader()
+			if openErr != nil {
+				result.err = openErr
+			} else {
+				result.index, result.err = prestackcore.BuildIndex(ctx, reader, mapping, func(prestackcore.IndexProgress) {})
+				_ = reader.Close()
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		prestackDeliveryMu.Lock()
+		defer prestackDeliveryMu.Unlock()
+		if prestackDeliveryHwnd != owner || prestackDeliveryOwnerToken != ownerToken || prestackState.compareBGeneration != gen || prestackState.workspaceGeneration != workspaceGeneration || prestackState.datasetGeneration != datasetGeneration || prestackState.compareBDatasetGeneration != bDatasetGeneration || prestackState.selectionGeneration != selectionGeneration || prestackState.compareBMappingGeneration != mappingGeneration || prestackState.compareModeGeneration != compareModeGeneration || ctx.Err() != nil {
+			return
+		}
+		prestackPendingCompareB = result
+		if posted, _, _ := pPostMessageW.Call(owner, WM_PRESTACK_COMPARE_B_READY, uintptr(gen), 0); posted == 0 {
+			prestackPendingCompareB = nil
+		}
+	}()
+}
+
+func cancelPrestackCompareB() {
+	if prestackState.compareBCancel != nil {
+		prestackState.compareBCancel()
+		prestackState.compareBCancel = nil
+	}
+	prestackState.compareBGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBDatasetGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBMappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareModeGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareBLoading = false
+	prestackState.compareBDataset = nil
+	prestackState.compareBIndex = nil
+	prestackState.compareBError = ""
+	prestackState.compareBMatch = prestackcore.CompareMatchResult{}
+	prestackState.compareBAxis = prestackcore.SampleAxisCompatibility{}
+	clearPrestackCompareRender()
+	prestackDeliveryMu.Lock()
+	prestackPendingCompareB = nil
+	prestackDeliveryMu.Unlock()
+	layoutPrestackControls()
+	redrawPrestackWholeClient()
+}
+
+func receivePrestackCompareB(gen int64) {
+	prestackDeliveryMu.Lock()
+	r := prestackPendingCompareB
+	if r != nil && r.generation == gen {
+		prestackPendingCompareB = nil
+	} else {
+		r = nil
+	}
+	prestackDeliveryMu.Unlock()
+	if r == nil || gen != prestackState.compareBGeneration || r.owner != prestackHwnd || r.ownerToken != prestackState.ownerToken || r.workspaceGeneration != prestackState.workspaceGeneration || r.datasetGeneration != prestackState.datasetGeneration || r.bDatasetGeneration != prestackState.compareBDatasetGeneration || r.selectionGeneration != prestackState.selectionGeneration || r.mappingGeneration != prestackState.compareBMappingGeneration || r.compareModeGeneration != prestackState.compareModeGeneration {
+		return
+	}
+	prestackState.compareBLoading = false
+	if prestackState.compareBCancel != nil {
+		prestackState.compareBCancel()
+		prestackState.compareBCancel = nil
+	}
+	if r.err != nil || r.dataset == nil || r.index == nil {
+		prestackState.compareBError = "B 索引失败：" + errorText(r.err, "未知错误")
+		setPrestackStatus(prestackState.compareBError + "；A 仍可继续浏览")
+		if prestackState.page == 3 {
+			startPrestackCompareRender()
+		}
+		layoutPrestackControls()
+		redrawPrestackWholeClient()
+		return
+	}
+	prestackState.compareBDataset = r.dataset
+	prestackState.compareBIndex = r.index
+	prestackState.compareBMapping = r.mapping
+	prestackState.compareBError = ""
+	bGatherOK := false
+	if prestackState.index != nil && len(prestackState.gather.TraceIndices) > 0 {
+		bGather, err := r.index.Gather(prestackState.selection)
+		if err == nil {
+			bGatherOK = true
+			prestackState.compareBMatch, _ = prestackcore.MatchGatherResults(prestackState.index, prestackState.gather, r.index, bGather)
+		} else {
+			// A's current selection may not exist in B. Never silently replace it
+			// with all B records: that produces plausible but incorrect matches.
+			prestackState.compareBMatch = prestackcore.CompareMatchResult{}
+			window := prestackcore.SampleWindow{Start: prestackState.sampleFirst, End: prestackState.sampleLast}
+			prestackState.compareBAxis = prestackcore.SampleAxisCompatibility{AWindow: window, BWindow: window, Reason: "B 当前道集不可用"}
+			setPrestackStatus("B 当前道集不可用；A 仍可继续浏览")
+		}
+	}
+	if bGatherOK {
+		prestackState.compareBAxis = comparePrestackGatherAxes(prestackState.index, prestackState.gather, r.index, rGatherForSelection(r.index, prestackState.selection))
+	}
+	if len(prestackState.compareBMatch.Pairs) == 0 && prestackState.compareBAxis.Reason == "" {
+		prestackState.compareBAxis.Reason = "当前道集无匹配道"
+	}
+	startPrestackCompareRender()
+	setPrestackStatus(fmt.Sprintf("B 已加载：%s | 匹配 %d 对；A 顺序保持不变", filepath.Base(r.dataset.Path), len(prestackState.compareBMatch.Pairs)))
+	layoutPrestackControls()
+	redrawPrestackWholeClient()
+}
+
+func errorText(err error, fallback string) string {
+	if err == nil {
+		return fallback
+	}
+	return err.Error()
 }
 
 // applyPrestackMultiKeys parses the command edit against the complete key
@@ -2419,11 +2796,7 @@ func paintPrestack(hdc uintptr) {
 	case 1:
 		paintPrestackGeometry(mem)
 	case 3:
-		content := RECT{Left: 40, Top: 114, Right: int32(maxInt(41, w-40)), Bottom: int32(maxInt(115, h-42))}
-		saved, _, _ := pSaveDC.Call(mem)
-		pIntersectClipRect.Call(mem, uintptr(content.Left), uintptr(content.Top), uintptr(content.Right), uintptr(content.Bottom))
-		drawPrestackQCText(mem, "叠前 A/B 对比将在后续版本提供。\n本模块只读浏览，不进行 NMO、叠加、插值或写回 SEG-Y。", content, DT_LEFT|prestackDTTop|DT_WORDBREAK)
-		pRestoreDC.Call(mem, saved)
+		paintPrestackCompare(mem)
 	case 4:
 		paintPrestackQC(mem)
 	}
@@ -2431,6 +2804,522 @@ func paintPrestack(hdc uintptr) {
 	// drawing never repaints toolbar controls or uses their pixels as overlays.
 	pBitBlt.Call(hdc, 0, 0, uintptr(w), uintptr(h), mem, 0, 0, SRCCOPY)
 }
+
+func prestackCompareFilterSet() prestackcore.CompareFilterSet {
+	mask := prestackState.compareFilterMask
+	return prestackcore.CompareFilterSet{Matched: mask&1 != 0, AOnly: mask&2 != 0, BOnly: mask&4 != 0, Ambiguous: mask&8 != 0, Invalid: mask&16 != 0}
+}
+
+func prestackCompareRecords(index *prestackcore.PrestackIndex, traces []int64) []prestackcore.PrestackTraceRecord {
+	if index == nil {
+		return nil
+	}
+	out := make([]prestackcore.PrestackTraceRecord, 0, len(traces))
+	for _, trace := range traces {
+		if trace >= 0 && trace < int64(len(index.Records)) {
+			out = append(out, index.Records[trace])
+		}
+	}
+	return out
+}
+
+func paintPrestackCompare(hdc uintptr) {
+	r := prestackLayoutRECT(prestackPanelLayoutForSize(int(clientWidth(prestackHwnd)), int(clientHeight(prestackHwnd)), 3).Content)
+	if r.Right <= r.Left || r.Bottom <= r.Top {
+		return
+	}
+	saved, _, _ := pSaveDC.Call(hdc)
+	pIntersectClipRect.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom))
+	lines := []string{"叠前只读 A/B 对比", "A 保持当前道集顺序；B 仅通过元数据键匹配，不按物理道号直接配对。"}
+	if prestackState.compareBLoading {
+		lines = append(lines, "正在加载 B：仅扫描道头，不读取振幅…")
+	} else if prestackState.compareBError != "" {
+		lines = append(lines, prestackState.compareBError, "A 仍可继续浏览；请重新点击“加载 B”。")
+	} else if prestackState.compareBDataset == nil {
+		lines = append(lines, "请点击“加载 B”选择第二个 SEG-Y 文件。")
+	} else {
+		lines = append(lines, fmt.Sprintf("A：%s | 当前道集物理道 %d | 显示列 %d", filepath.Base(prestackState.dataset.Path), len(prestackState.gather.TraceIndices), len(prestackState.compareDisplayRows)))
+		lines = append(lines, fmt.Sprintf("B：%s | 索引物理道 %d | B 映射独立", filepath.Base(prestackState.compareBDataset.Path), len(prestackState.compareBIndex.Records)))
+		m := prestackState.compareBMatch
+		lines = append(lines, fmt.Sprintf("一级：%s | 二级：%s | 匹配策略：%s", prestackGatherKindLabel(prestackState.selection.Type), prestackSecondaryLabel(prestackState.selection), m.Strategy))
+		lines = append(lines, fmt.Sprintf("匹配 %d 对 | A 独有 %d | B 独有 %d | 歧义 A/B %d/%d | 无效 A/B %d/%d", len(m.Pairs), len(m.AOnly), len(m.BOnly), len(m.AmbiguousA), len(m.AmbiguousB), len(m.InvalidA), len(m.InvalidB)))
+		if m.Reason != "" && len(m.Pairs) == 0 {
+			lines = append(lines, "状态："+m.Reason)
+		}
+		if !prestackState.compareBAxis.Compatible {
+			reason := prestackState.compareBAxis.Reason
+			if reason == "" {
+				reason = "当前道集无可用匹配道"
+			}
+			lines = append(lines, "Δ 已禁用："+reason)
+		} else {
+			lines = append(lines, "采样轴兼容：A/B 可进行浮点样点差值。")
+		}
+	}
+	text := strings.Join(lines, "\r\n")
+	textHeight := measurePrestackQCText(hdc, text, int(r.Right-r.Left))
+	textRect := RECT{Left: r.Left, Top: r.Top, Right: r.Right, Bottom: r.Top + int32(textHeight)}
+	drawPrestackQCText(hdc, text, textRect, DT_LEFT|prestackDTTop|DT_WORDBREAK)
+	// Use the same deterministic panel contract as the worker and hit-testing.
+	// The worker cannot measure text without a paint DC, so the contract reserves
+	// a conservative summary band; keeping one source of panel rectangles avoids
+	// rejecting every frame because the measured text height differs.
+	panels := prestackComparePanelRects()
+	for i, label := range []string{"A（当前道集）", "B（匹配道集）", "Δ（A−B）"} {
+		rr := panels[i]
+		if rr.Right <= rr.Left || rr.Bottom <= rr.Top {
+			continue
+		}
+		border, _, _ := pCreateSolidBrush.Call(rgbRef(190, 190, 190))
+		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&rr)), border)
+		inner := RECT{Left: rr.Left + 1, Top: rr.Top + 1, Right: rr.Right - 1, Bottom: rr.Bottom - 1}
+		white, _, _ := pGetStockObject.Call(WHITE_BRUSH)
+		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&inner)), white)
+		pDeleteObject.Call(border)
+		var pixels []byte
+		switch i {
+		case 0:
+			pixels = prestackState.compareA
+		case 1:
+			pixels = prestackState.compareB
+		case 2:
+			pixels = prestackState.compareDelta
+		}
+		drawAxisText(hdc, label, int(rr.Left), int(rr.Top)+8, int(rr.Right), int(rr.Top)+30, DT_CENTER|DT_SINGLELINE)
+		imageRect := RECT{Left: rr.Left + 1, Top: rr.Top + 34, Right: rr.Right - 1, Bottom: rr.Bottom - 1}
+		paintPrestackCompareRaster(hdc, imageRect, pixels, prestackState.compareWidth, prestackState.compareHeight)
+	}
+	pRestoreDC.Call(hdc, saved)
+}
+
+func prestackComparePanelRects() [3]RECT {
+	r := prestackLayoutRECT(prestackPanelLayoutForSize(clientWidth(prestackHwnd), clientHeight(prestackHwnd), 3).Content)
+	// The worker needs panel dimensions before WM_PAINT supplies a DC. Keep a
+	// conservative estimate here; paintPrestackCompare uses the exact measured
+	// height, and the render token rejects any size that changed in between.
+	textHeight := 112
+	if int(r.Right-r.Left) < 900 {
+		textHeight = 176
+	}
+	return prestackComparePanelRectsForContent(r, textHeight)
+}
+
+func prestackComparePanelRectsForContent(r RECT, textHeight int) [3]RECT {
+	top, bottom := r.Top+int32(textHeight+12), r.Bottom-12
+	if bottom <= top {
+		return [3]RECT{}
+	}
+	available := int(r.Right - r.Left)
+	columns := 3
+	if available < 900 {
+		columns = 1
+	}
+	width := (available - (columns-1)*12) / columns
+	if width < 80 {
+		columns = 1
+		width = available
+	}
+	rows := (3 + columns - 1) / columns
+	rowHeight := (int(bottom-top) - (rows-1)*12) / rows
+	var out [3]RECT
+	for i := range out {
+		col, row := i%columns, i/columns
+		left := int(r.Left) + col*(width+12)
+		panelTop := int(top) + row*(rowHeight+12)
+		out[i] = RECT{Left: int32(left), Top: int32(panelTop), Right: int32(left + width), Bottom: int32(minInt(panelTop+rowHeight, int(bottom)))}
+	}
+	return out
+}
+
+func prestackComparePanelAt(x, y int) (int, bool) {
+	for i, r := range prestackComparePanelRects() {
+		if r.Right > r.Left && r.Bottom > r.Top && x >= int(r.Left) && x < int(r.Right) && y >= int(r.Top) && y < int(r.Bottom) {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func prestackCompareRowAt(x, panel int) (prestackcore.CompareLogicalRow, bool) {
+	panels := prestackComparePanelRects()
+	if panel < 0 || panel >= len(panels) || len(prestackState.compareDisplayRows) == 0 {
+		return prestackcore.CompareLogicalRow{}, false
+	}
+	r := panels[panel]
+	f := float64(x-int(r.Left)) / float64(maxInt(1, int(r.Right-r.Left)))
+	i := clampInt(int(math.Round(f*float64(len(prestackState.compareDisplayRows)-1))), 0, len(prestackState.compareDisplayRows)-1)
+	return prestackState.compareDisplayRows[i], true
+}
+
+func prestackInspectCompareTrace(panel int, row prestackcore.CompareLogicalRow, x, y int) {
+	var index *prestackcore.PrestackIndex
+	var data *dataset.SeismicDataset
+	var trace int64
+	role := "A"
+	if panel == 1 && row.HasB && prestackState.compareBIndex != nil {
+		index, data, trace, role = prestackState.compareBIndex, prestackState.compareBDataset, row.BTrace, "B"
+	} else if row.HasA {
+		index, data, trace = prestackState.index, prestackState.dataset, row.ATrace
+	}
+	if index == nil || data == nil || trace < 0 || trace >= int64(len(index.Records)) {
+		return
+	}
+	r := index.Records[trace]
+	panels := prestackComparePanelRects()
+	pr := panels[clampInt(panel, 0, len(panels)-1)]
+	sample := prestackState.sampleFirst
+	if y >= int(pr.Top) && y < int(pr.Bottom) {
+		sample = prestackState.sampleFirst + int(math.Round(float64(y-int(pr.Top))/float64(maxInt(1, int(pr.Bottom-pr.Top)))*float64(prestackState.sampleLast-prestackState.sampleFirst)))
+	}
+	context := fmt.Sprintf("叠前 Compare %s | physical trace %d | Shot %d | Receiver %d | CDP %d | Header Offset %.5g | Computed Offset %.5g | Azimuth %.3f | Source (%.6g,%.6g) Receiver (%.6g,%.6g) Midpoint (%.6g,%.6g)", role, trace+1, r.SourceID, r.ReceiverID, r.CDP, r.HeaderOffset, r.ComputedOffset, r.Azimuth, r.SourceX, r.SourceY, r.ReceiverX, r.ReceiverY, r.MidpointX, r.MidpointY)
+	showTraceAnalysisSelection(traceAnalysisSelection{Context: context, Targets: []traceAnalysisTarget{{Role: role, Path: data.Path, Trace: trace, SampleStart: prestackState.sampleFirst, SampleEnd: prestackState.sampleLast, MarkerSample: sample, Inline: r.Inline, Crossline: r.Crossline, HasGeometry: index.UsesGrid}}})
+}
+
+func clearPrestackCompareRender() {
+	invalidatePrestackCompareRender()
+	prestackState.compareA, prestackState.compareB, prestackState.compareDelta = nil, nil, nil
+	prestackState.compareWidth, prestackState.compareHeight = 0, 0
+}
+
+// invalidatePrestackCompareRender cancels only the in-flight operation while
+// retaining the last complete A/B/Δ frame. It is used during WM_SIZE so the
+// user sees a clipped preview instead of a white/black placeholder.
+func invalidatePrestackCompareRender() {
+	if prestackState.compareRenderCancel != nil {
+		prestackState.compareRenderCancel()
+		prestackState.compareRenderCancel = nil
+	}
+	prestackState.compareRenderGeneration = atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareRendering = false
+	prestackDeliveryMu.Lock()
+	prestackPendingCompareRender = nil
+	prestackDeliveryMu.Unlock()
+}
+
+func refreshPrestackCompareMatch() {
+	prestackState.compareViewFirst, prestackState.compareViewLast = 0, -1
+	if prestackState.compareBDataset == nil || prestackState.compareBIndex == nil || prestackState.index == nil {
+		clearPrestackCompareRender()
+		return
+	}
+	bGather, err := prestackState.compareBIndex.Gather(prestackState.selection)
+	if err != nil {
+		prestackState.compareBMatch = prestackcore.CompareMatchResult{}
+		window := prestackcore.SampleWindow{Start: prestackState.sampleFirst, End: prestackState.sampleLast}
+		prestackState.compareBAxis = prestackcore.SampleAxisCompatibility{AWindow: window, BWindow: window, Reason: "B 当前道集不可用"}
+		startPrestackCompareRender()
+		return
+	}
+	prestackState.compareBMatch, _ = prestackcore.MatchGatherResults(prestackState.index, prestackState.gather, prestackState.compareBIndex, bGather)
+	prestackState.compareBAxis = comparePrestackGatherAxes(prestackState.index, prestackState.gather, prestackState.compareBIndex, bGather)
+	if len(prestackState.compareBMatch.Pairs) == 0 && prestackState.compareBAxis.Reason == "" {
+		prestackState.compareBAxis.Reason = "当前道集无匹配道"
+	}
+	startPrestackCompareRender()
+}
+
+func rGatherForSelection(index *prestackcore.PrestackIndex, selection prestackcore.GatherSelection) prestackcore.GatherResult {
+	if index == nil {
+		return prestackcore.GatherResult{}
+	}
+	g, err := index.Gather(selection)
+	if err == nil {
+		return g
+	}
+	return prestackcore.GatherResult{}
+}
+
+// comparePrestackGatherAxes checks the file-level axis and the trace-header
+// delay/sample metadata used by the current selections.  A SEG-Y file may
+// legally contain records with different delay or sample counts; in that
+// case A/B remain viewable but Δ is disabled rather than silently shifting
+// samples or truncating to a shorter record.
+func comparePrestackGatherAxes(aIndex *prestackcore.PrestackIndex, aGather prestackcore.GatherResult, bIndex *prestackcore.PrestackIndex, bGather prestackcore.GatherResult) prestackcore.SampleAxisCompatibility {
+	window := prestackcore.SampleWindow{Start: prestackState.sampleFirst, End: prestackState.sampleLast}
+	axisFromIndex := func(index *prestackcore.PrestackIndex, gather prestackcore.GatherResult) prestackcore.SampleAxis {
+		axis := prestackcore.SampleAxis{}
+		if index != nil {
+			axis.SampleCount = index.BinarySampleCount
+			axis.SampleIntervalUS = index.BinarySampleIntervalUS
+		}
+		return axis
+	}
+	firstAxis := func(index *prestackcore.PrestackIndex, gather prestackcore.GatherResult) (prestackcore.SampleAxis, bool, string) {
+		axis := axisFromIndex(index, gather)
+		var have bool
+		for _, trace := range gather.TraceIndices {
+			if index == nil || trace < 0 || trace >= int64(len(index.Records)) {
+				continue
+			}
+			r := index.Records[trace]
+			candidate := prestackcore.SampleAxis{SampleCount: r.SampleCount, SampleIntervalUS: r.SampleIntervalUS, DelayMS: r.DelayMS, HasTimeOrigin: true, TimeOriginMS: float64(r.DelayMS)}
+			if !have {
+				axis = candidate
+				have = true
+				continue
+			}
+			if candidate.SampleCount != axis.SampleCount || candidate.SampleIntervalUS != axis.SampleIntervalUS || candidate.DelayMS != axis.DelayMS {
+				return axis, false, "当前道集内部采样轴不一致"
+			}
+		}
+		return axis, true, ""
+	}
+	a, aOK, aReason := firstAxis(aIndex, aGather)
+	b, bOK, bReason := firstAxis(bIndex, bGather)
+	if !aOK || !bOK {
+		reason := aReason
+		if reason == "" {
+			reason = bReason
+		}
+		return prestackcore.SampleAxisCompatibility{A: a, B: b, AWindow: window, BWindow: window, Reason: reason}
+	}
+	return prestackcore.CompareSampleAxesWithWindows(a, b, window, window)
+}
+
+func startPrestackCompareRender() {
+	if prestackState.dataset == nil || prestackState.index == nil || len(prestackState.gather.TraceIndices) == 0 {
+		clearPrestackCompareRender()
+		return
+	}
+	panels := prestackComparePanelRects()
+	width, height := int(panels[0].Right-panels[0].Left), int(panels[0].Bottom-panels[0].Top)
+	if width < 2 || height < 2 {
+		clearPrestackCompareRender()
+		return
+	}
+	clearPrestackCompareRender()
+	ctx, cancel := context.WithCancel(context.Background())
+	prestackState.compareRenderCancel = cancel
+	gen := atomic.AddInt64(&prestackGeneration, 1)
+	prestackState.compareRenderGeneration = gen
+	prestackState.compareRendering = true
+	owner, ownerToken := prestackHwnd, prestackState.ownerToken
+	datasetGeneration, selectionGeneration, bGeneration, bDatasetGeneration, resizeGeneration := prestackState.datasetGeneration, prestackState.selectionGeneration, prestackState.compareBGeneration, prestackState.compareBDatasetGeneration, prestackState.resizeGeneration
+	aMappingGeneration, bMappingGeneration := prestackState.mappingGeneration, prestackState.compareBMappingGeneration
+	compareModeGeneration, displayGeneration := prestackState.compareModeGeneration, prestackState.compareDisplayGeneration
+	workspaceGeneration := prestackState.workspaceGeneration
+	aData, bData := prestackState.dataset, prestackState.compareBDataset
+	aGatherTraces := append([]int64(nil), prestackState.gather.TraceIndices...)
+	aRecords := prestackCompareRecords(prestackState.index, aGatherTraces)
+	bGather := rGatherForSelection(prestackState.compareBIndex, prestackState.selection)
+	bRecords := prestackCompareRecords(prestackState.compareBIndex, bGather.TraceIndices)
+	filters := prestackCompareFilterSet()
+	var rows []prestackcore.CompareLogicalRow
+	if prestackState.compareBDataset != nil && prestackState.compareBIndex != nil {
+		rows = prestackcore.FilterCompareRows(prestackState.compareBMatch, aRecords, bRecords, filters)
+	} else {
+		rows = make([]prestackcore.CompareLogicalRow, 0, len(aRecords))
+		for i, record := range aRecords {
+			trace := record.TraceNumber
+			rows = append(rows, prestackcore.CompareLogicalRow{Classification: prestackcore.CompareRowAOnly, ATrace: trace, AIndex: i, BIndex: -1, HasA: true})
+		}
+	}
+	if prestackState.compareViewFirst < 0 || prestackState.compareViewFirst >= len(rows) {
+		prestackState.compareViewFirst = 0
+	}
+	if prestackState.compareViewLast < prestackState.compareViewFirst || prestackState.compareViewLast >= len(rows) {
+		prestackState.compareViewLast = len(rows) - 1
+	}
+	if len(rows) == 0 {
+		prestackState.compareRows, prestackState.compareDisplayRows = nil, nil
+	} else {
+		prestackState.compareRows = append([]prestackcore.CompareLogicalRow(nil), rows...)
+		prestackState.compareDisplayRows = append([]prestackcore.CompareLogicalRow(nil), rows[prestackState.compareViewFirst:prestackState.compareViewLast+1]...)
+	}
+	rows = append([]prestackcore.CompareLogicalRow(nil), prestackState.compareDisplayRows...)
+	tracesA := make([]int64, 0, len(rows))
+	tracesB := make([]int64, 0, len(rows))
+	tracesDeltaA := make([]int64, 0, len(rows))
+	tracesDeltaB := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if row.HasA {
+			tracesA = append(tracesA, row.ATrace)
+		}
+		if row.HasB {
+			tracesB = append(tracesB, row.BTrace)
+		}
+		if row.Classification == prestackcore.CompareRowMatched && row.HasA && row.HasB {
+			tracesDeltaA = append(tracesDeltaA, row.ATrace)
+			tracesDeltaB = append(tracesDeltaB, row.BTrace)
+		}
+	}
+	if len(tracesA) == 0 {
+		tracesA = aGatherTraces
+	}
+	s0, s1 := prestackState.sampleFirst, prestackState.sampleLast
+	agc, gain, palette := prestackState.agc, prestackState.gain, prestackState.palette
+	axisCompatible := prestackState.compareBAxis.Compatible
+	go func() {
+		result := &prestackCompareRenderResult{generation: gen, datasetGeneration: datasetGeneration, bDatasetGeneration: bDatasetGeneration, selectionGeneration: selectionGeneration, aMappingGeneration: aMappingGeneration, bGeneration: bGeneration, bMappingGeneration: bMappingGeneration, compareModeGeneration: compareModeGeneration, displayGeneration: displayGeneration, sampleFirst: int64(s0), sampleLast: int64(s1), resizeGeneration: resizeGeneration, workspaceGeneration: workspaceGeneration, owner: int64(owner), ownerToken: ownerToken, comparePage: 3, width: width, height: height, palette: palette}
+		ra, err := aData.OpenReader()
+		if err != nil {
+			result.err = err
+		} else {
+			defer ra.Close()
+			var rb *segy.File
+			if len(tracesB) > 0 && bData != nil {
+				var openErr error
+				rb, openErr = bData.OpenReader()
+				if openErr != nil {
+					// A failed B reader must not hide the independent A panel.
+					// Keep the error attached to B so the UI can explain why B/Δ
+					// are empty while A remains usable.
+					result.bErr = openErr
+				}
+			}
+			if rb != nil {
+				defer rb.Close()
+			}
+			opts := segy.RenderOptions{Width: width, Height: height, SampleStart: s0, SampleEnd: s1, AGC: agc, GainPercent: gain, ClipPercent: 99, DisplayMode: segy.DisplayAdaptive, ReadStrategy: segy.ReadStrategySparseMapped, Workers: 2}
+			var av, bv []float64
+			av, _, err = ra.RenderTraceIndicesValues(tracesA, opts)
+			if err != nil {
+				result.err = err
+			} else {
+				if rb != nil {
+					bv, _, err = rb.RenderTraceIndicesValues(tracesB, opts)
+					if err != nil {
+						result.bErr = err
+						bv = nil
+					}
+				}
+				minV, maxV := math.Inf(1), math.Inf(-1)
+				for _, v := range av {
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						continue
+					}
+					minV, maxV = math.Min(minV, v), math.Max(maxV, v)
+				}
+				for _, v := range bv {
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						continue
+					}
+					minV, maxV = math.Min(minV, v), math.Max(maxV, v)
+				}
+				if !finiteFloat(minV) || !finiteFloat(maxV) || minV >= maxV {
+					minV, maxV = -1, 1
+				}
+				result.a = crookedPaletteBGRA(segy.MapAmplitudeValues(av, minV, maxV), palette)
+				if len(bv) > 0 {
+					result.b = crookedPaletteBGRA(segy.MapAmplitudeValues(bv, minV, maxV), palette)
+				}
+				if axisCompatible && len(tracesDeltaA) > 0 && len(tracesDeltaB) > 0 && rb != nil {
+					dvA, _, deltaReadErr := ra.RenderTraceIndicesValues(tracesDeltaA, opts)
+					dvB, _, deltaReadErrB := rb.RenderTraceIndicesValues(tracesDeltaB, opts)
+					if deltaReadErr != nil {
+						result.bErr = deltaReadErr
+					} else if deltaReadErrB != nil {
+						result.bErr = deltaReadErrB
+					}
+					diff, diffErr := prestackcore.DifferenceValues(dvA, dvB)
+					if diffErr != nil {
+						result.bErr = diffErr
+					} else {
+						lo, hi := prestackcore.SymmetricValueRange(diff)
+						result.delta = crookedPaletteBGRA(segy.MapAmplitudeValues(diff, lo, hi), palette)
+					}
+				}
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		prestackDeliveryMu.Lock()
+		defer prestackDeliveryMu.Unlock()
+		if prestackDeliveryHwnd != owner || prestackDeliveryOwnerToken != ownerToken || prestackState.compareRenderGeneration != gen || ctx.Err() != nil {
+			return
+		}
+		prestackPendingCompareRender = result
+		if posted, _, _ := pPostMessageW.Call(owner, WM_PRESTACK_COMPARE_RENDER, uintptr(gen), 0); posted == 0 {
+			prestackPendingCompareRender = nil
+		}
+	}()
+}
+
+func finiteFloat(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+func prestackValidCompareBuffer(buf []byte, width, height int, optional bool) bool {
+	if optional && len(buf) == 0 {
+		return true
+	}
+	return width > 0 && height > 0 && len(buf) == width*height*4
+}
+
+// prestackCompareRenderMatches is the pure delivery gate for a Compare frame.
+// Keeping the complete predicate in one place makes it testable and prevents
+// a future token field from being checked on one async path but omitted on
+// another.
+func prestackCompareRenderMatches(r *prestackCompareRenderResult, state prestackSession, owner uintptr, currentWidth, currentHeight int) bool {
+	return r != nil && r.owner == int64(owner) && r.ownerToken == state.ownerToken &&
+		r.workspaceGeneration == state.workspaceGeneration &&
+		r.datasetGeneration == state.datasetGeneration &&
+		r.bDatasetGeneration == state.compareBDatasetGeneration &&
+		r.selectionGeneration == state.selectionGeneration &&
+		r.aMappingGeneration == state.mappingGeneration &&
+		r.bGeneration == state.compareBGeneration &&
+		r.bMappingGeneration == state.compareBMappingGeneration &&
+		r.compareModeGeneration == state.compareModeGeneration &&
+		r.displayGeneration == state.compareDisplayGeneration &&
+		r.resizeGeneration == state.resizeGeneration &&
+		r.sampleFirst == int64(state.sampleFirst) && r.sampleLast == int64(state.sampleLast) &&
+		r.comparePage == state.page && r.width > 0 && r.height > 0 &&
+		currentWidth == r.width && currentHeight == r.height
+}
+
+func receivePrestackCompareRender(gen int64) {
+	prestackDeliveryMu.Lock()
+	r := prestackPendingCompareRender
+	if r != nil && r.generation == gen {
+		prestackPendingCompareRender = nil
+	} else {
+		r = nil
+	}
+	prestackDeliveryMu.Unlock()
+	panels := prestackComparePanelRects()
+	currentWidth, currentHeight := 0, 0
+	if panels[0].Right > panels[0].Left && panels[0].Bottom > panels[0].Top {
+		currentWidth = int(panels[0].Right - panels[0].Left)
+		currentHeight = int(panels[0].Bottom - panels[0].Top)
+	}
+	if gen != prestackState.compareRenderGeneration || !prestackCompareRenderMatches(r, prestackState, prestackHwnd, currentWidth, currentHeight) {
+		return
+	}
+	if !prestackValidCompareBuffer(r.a, r.width, r.height, false) ||
+		!prestackValidCompareBuffer(r.b, r.width, r.height, true) ||
+		!prestackValidCompareBuffer(r.delta, r.width, r.height, true) {
+		return
+	}
+	prestackState.compareRendering = false
+	if prestackState.compareRenderCancel != nil {
+		prestackState.compareRenderCancel = nil
+	}
+	if r.err != nil {
+		setPrestackStatus("A/B 图像渲染失败：" + r.err.Error())
+		return
+	}
+	if r.bErr != nil {
+		prestackState.compareBError = "B 图像读取失败：" + r.bErr.Error()
+		setPrestackStatus(prestackState.compareBError + "；A 仍可继续浏览")
+	}
+	prestackState.compareA, prestackState.compareB, prestackState.compareDelta = r.a, r.b, r.delta
+	prestackState.compareWidth, prestackState.compareHeight = r.width, r.height
+	invalidatePrestackScene()
+}
+
+func paintPrestackCompareRaster(hdc uintptr, r RECT, pixels []byte, width, height int) {
+	if width <= 0 || height <= 0 || r.Right <= r.Left || r.Bottom <= r.Top || len(pixels) != width*height*4 {
+		return
+	}
+	saved, _, _ := pSaveDC.Call(hdc)
+	pIntersectClipRect.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom))
+	bmi := BITMAPINFO{Header: BITMAPINFOHEADER{Size: uint32(unsafe.Sizeof(BITMAPINFOHEADER{})), Width: int32(width), Height: -int32(height), Planes: 1, BitCount: 32, Compression: BI_RGB}}
+	pSetStretchBltMode.Call(hdc, HALFTONE)
+	pStretchDIBits.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0, 0, uintptr(width), uintptr(height), uintptr(unsafe.Pointer(&pixels[0])), uintptr(unsafe.Pointer(&bmi)), DIB_RGB_COLORS, SRCCOPY)
+	pRestoreDC.Call(hdc, saved)
+}
+
+func clientWidth(hwnd uintptr) int  { r := clientRect(hwnd); return int(r.Right - r.Left) }
+func clientHeight(hwnd uintptr) int { r := clientRect(hwnd); return int(r.Bottom - r.Top) }
 func paintPrestackGather(hdc uintptr) {
 	r := prestackSceneRect()
 	if len(prestackState.indices) == 0 {
@@ -2978,6 +3867,9 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			prestackState.renderCancel()
 			prestackState.renderCancel = nil
 		}
+		if prestackState.page == 3 {
+			invalidatePrestackCompareRender()
+		}
 		prestackState.renderGeneration = atomic.AddInt64(&prestackGeneration, 1)
 		prestackState.rendering = false
 		invalidatePrestackScene()
@@ -2999,10 +3891,19 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			// WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE pair.  Treat that path as a
 			// one-shot resize as well; minimized windows (wParam == 1) are
 			// intentionally left without a render.
-			if wParam != 1 && !prestackState.resizeActive && prestackState.page == 0 && prestackState.index != nil {
+			if wParam != 1 && prestackState.page == 0 && prestackState.index != nil {
 				prestackState.resizeGeneration++
 				prestackState.resizePending = true
-				schedulePrestackResizeRender(h, prestackState.resizeGeneration)
+				if !prestackState.resizeActive {
+					schedulePrestackResizeRender(h, prestackState.resizeGeneration)
+				}
+			} else if wParam != 1 && prestackState.page == 3 && prestackState.index != nil {
+				prestackState.resizeGeneration++
+				prestackState.resizePending = true
+				invalidatePrestackCompareRender()
+				if !prestackState.resizeActive {
+					schedulePrestackResizeRender(h, prestackState.resizeGeneration)
+				}
 			}
 			invalidatePrestackScene()
 			// All prestack pages share the same parent/client and child toolbar.
@@ -3021,6 +3922,10 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			prestackState.resizePending = true
 			prestackState.resizeGeneration++
 			schedulePrestackResizeRender(h, prestackState.resizeGeneration)
+		} else if prestackState.page == 3 && prestackState.index != nil {
+			prestackState.resizeGeneration++
+			prestackState.resizePending = true
+			schedulePrestackResizeRender(h, prestackState.resizeGeneration)
 		} else {
 			prestackState.resizePending = false
 		}
@@ -3033,6 +3938,9 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		if prestackState.page == 0 && !prestackState.resizeActive && prestackState.resizePending && int64(wParam) == prestackState.resizeGeneration {
 			prestackState.resizePending = false
 			startPrestackRender()
+		} else if prestackState.page == 3 && !prestackState.resizeActive && prestackState.resizePending && int64(wParam) == prestackState.resizeGeneration {
+			prestackState.resizePending = false
+			startPrestackCompareRender()
 		}
 		return 0
 	case WM_PAINT:
@@ -3046,6 +3954,12 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_PRESTACK_RENDER:
 		receivePrestackRender(int64(wParam))
+		return 0
+	case WM_PRESTACK_COMPARE_B_READY:
+		receivePrestackCompareB(int64(wParam))
+		return 0
+	case WM_PRESTACK_COMPARE_RENDER:
+		receivePrestackCompareRender(int64(wParam))
 		return 0
 	case WM_PRESTACK_EXPORT_DONE:
 		receivePrestackExport()
@@ -3097,10 +4011,64 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 		case IDPRESTACK_MAPPING_AUTO:
 			startPrestackIndex(true)
+		case IDPRESTACK_MAPPING_TARGET:
+			if prestackComboSelection(code) {
+				v, _, _ := pSendMessageW.Call(prestackUI.compareMappingTarget, CB_GETCURSEL, 0, 0)
+				if v == 1 && prestackState.compareBDataset == nil {
+					pSendMessageW.Call(prestackUI.compareMappingTarget, CB_SETCURSEL, 0, 0)
+					prestackState.mappingTargetB = false
+					message(prestackHwnd, "B 道头映射", "请先加载 B 文件，再编辑 B 的独立映射。", MB_OK|MB_ICONINFORMATION)
+				} else {
+					prestackState.mappingTargetB = v == 1
+					populatePrestackMapping()
+					setPrestackStatus(map[bool]string{true: "当前编辑 B 的独立道头映射", false: "当前编辑 A 的道头映射"}[prestackState.mappingTargetB])
+				}
+			}
 		case IDPRESTACK_MAPPING_APPLY:
 			applyPrestackMapping()
 		case IDPRESTACK_QC_EXPORT:
 			exportPrestackQC()
+		case IDPRESTACK_COMPARE_OPEN_B:
+			if code == 0 || code == 1 {
+				if path := openDialog(h); path != "" {
+					startPrestackCompareB(path)
+				}
+			}
+		case IDPRESTACK_COMPARE_CLOSE_B:
+			if code == 0 || code == 1 {
+				cancelPrestackCompareB()
+				setPrestackStatus("已关闭 B；A 仍可继续浏览")
+			}
+		case IDPRESTACK_COMPARE_EXPORT:
+			if code == 0 || code == 1 {
+				exportPrestackCompareReport()
+			}
+		case IDPRESTACK_COMPARE_FILTER_MATCHED, IDPRESTACK_COMPARE_FILTER_AONLY, IDPRESTACK_COMPARE_FILTER_BONLY, IDPRESTACK_COMPARE_FILTER_AMBIGUOUS, IDPRESTACK_COMPARE_FILTER_INVALID:
+			if code == 0 || code == 1 {
+				idx := id - IDPRESTACK_COMPARE_FILTER_MATCHED
+				bit := uint32(1) << uint(idx)
+				filterControl := prestackUI.compareFilterMatched
+				switch idx {
+				case 1:
+					filterControl = prestackUI.compareFilterAOnly
+				case 2:
+					filterControl = prestackUI.compareFilterBOnly
+				case 3:
+					filterControl = prestackUI.compareFilterAmbiguous
+				case 4:
+					filterControl = prestackUI.compareFilterInvalid
+				}
+				v, _, _ := pSendMessageW.Call(filterControl, BM_GETCHECK, 0, 0)
+				if v == BST_CHECKED {
+					prestackState.compareFilterMask |= bit
+				} else {
+					prestackState.compareFilterMask &^= bit
+				}
+				if prestackState.compareBDataset != nil {
+					prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+					startPrestackCompareRender()
+				}
+			}
 		case IDPRESTACK_PREV:
 			selectPrestackGather(prestackState.keyIndex - 1)
 		case IDPRESTACK_NEXT:
@@ -3173,11 +4141,21 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 			prestackState.gain = math.Max(0, math.Min(49, prestackState.gain+delta))
 			setText(prestackUI.gain, fmt.Sprintf("%.0f%%", prestackState.gain))
+			prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+			clearPrestackCompareRender()
 			startPrestackRender()
+			if prestackState.page == 3 && prestackState.compareBDataset != nil {
+				startPrestackCompareRender()
+			}
 		case IDPRESTACK_AGC:
 			v, _, _ := pSendMessageW.Call(prestackUI.agc, BM_GETCHECK, 0, 0)
 			prestackState.agc = v == BST_CHECKED
+			prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+			clearPrestackCompareRender()
 			startPrestackRender()
+			if prestackState.page == 3 && prestackState.compareBDataset != nil {
+				startPrestackCompareRender()
+			}
 		case IDPRESTACK_RESET:
 			resetPrestackSection()
 		case IDPRESTACK_HEADERS:
@@ -3204,6 +4182,21 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 	case WM_LBUTTONDOWN, WM_RBUTTONDOWN:
 		x, y := int(int16(lParam&0xffff)), int(int16(lParam>>16))
+		if prestackState.page == 3 {
+			if panel, ok := prestackComparePanelAt(x, y); ok {
+				prestackState.dragging = true
+				prestackState.panning = msg == WM_RBUTTONDOWN
+				prestackState.ctrlClick = msg == WM_LBUTTONDOWN && (wParam&prestackMKControl) != 0
+				prestackState.compareDragPanel = panel
+				prestackState.dragX, prestackState.dragY = x, y
+				prestackState.dragCurrentX, prestackState.dragCurrentY = x, y
+				prestackState.dragFirst, prestackState.dragLast = prestackState.compareViewFirst, prestackState.compareViewLast
+				prestackState.dragSampleFirst, prestackState.dragSampleLast = prestackState.sampleFirst, prestackState.sampleLast
+				pSetCapture.Call(h)
+				pSetFocus.Call(h)
+				return 0
+			}
+		}
 		if !prestackPointInside(x, y) || prestackState.page > 1 {
 			// If this message arrived while the parent still owned capture, it is
 			// the first click on a child/toolbar after a drag.  Release capture so
@@ -3226,6 +4219,12 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		x, y := int(int16(lParam&0xffff)), int(int16(lParam>>16))
 		if prestackState.dragging {
 			r := prestackSceneRect()
+			if prestackState.page == 3 {
+				panels := prestackComparePanelRects()
+				if prestackState.compareDragPanel >= 0 && prestackState.compareDragPanel < len(panels) {
+					r = panels[prestackState.compareDragPanel]
+				}
+			}
 			x = clampInt(x, int(r.Left), int(r.Right))
 			y = clampInt(y, int(r.Top), int(r.Bottom))
 			prestackState.dragCurrentX, prestackState.dragCurrentY = x, y
@@ -3237,6 +4236,8 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				prestackState.mapBounds.XMax += a - c
 				prestackState.mapBounds.YMin += b - d
 				prestackState.mapBounds.YMax += b - d
+			} else if prestackState.page == 3 {
+				invalidatePrestackScene()
 			}
 			invalidatePrestackScene()
 		} else if prestackPointInside(x, y) && time.Since(prestackState.lastHover) > 50*time.Millisecond {
@@ -3254,6 +4255,18 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				}
 			} else if prestackState.page == 0 {
 				prestackHoverGather(x, y)
+			} else if prestackState.page == 3 {
+				if panel, ok := prestackComparePanelAt(x, y); ok {
+					if row, rowOK := prestackCompareRowAt(x, panel); rowOK {
+						roleTrace := int64(-1)
+						if panel == 1 && row.HasB {
+							roleTrace = row.BTrace
+						} else if row.HasA {
+							roleTrace = row.ATrace
+						}
+						setPrestackStatus(fmt.Sprintf("Compare %s | 逻辑列 %d / %d | physical trace %d | Ctrl+单击查看道分析", []string{"A", "B", "Δ"}[panel], clampInt(int(math.Round(float64(x-int(prestackComparePanelRects()[panel].Left))/float64(maxInt(1, int(prestackComparePanelRects()[panel].Right-prestackComparePanelRects()[panel].Left)))*float64(len(prestackState.compareDisplayRows)-1)))+1, 0, maxInt(0, len(prestackState.compareDisplayRows)-1))+1, len(prestackState.compareDisplayRows), roleTrace+1))
+					}
+				}
 			}
 		}
 		return 0
@@ -3269,6 +4282,47 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		x, y := prestackState.dragCurrentX, prestackState.dragCurrentY
 		dx, dy := absInt(x-prestackState.dragX), absInt(y-prestackState.dragY)
 		r := prestackSceneRect()
+		if prestackState.page == 3 {
+			panels := prestackComparePanelRects()
+			if prestackState.compareDragPanel >= 0 && prestackState.compareDragPanel < len(panels) {
+				r = panels[prestackState.compareDragPanel]
+			}
+			if dx < 5 && dy < 5 && prestackState.ctrlClick {
+				if row, ok := prestackCompareRowAt(x, prestackState.compareDragPanel); ok {
+					prestackInspectCompareTrace(prestackState.compareDragPanel, row, x, y)
+				}
+			} else if prestackState.panning && (dx >= 5 || dy >= 5) {
+				total := len(prestackState.compareRows)
+				if total > 1 {
+					n := prestackState.dragLast - prestackState.dragFirst
+					shift := int(math.Round(float64(prestackState.dragX-x) * float64(total-1) / float64(maxInt(1, int(r.Right-r.Left)))))
+					maxFirst := maxInt(0, total-1-n)
+					prestackState.compareViewFirst = clampInt(prestackState.dragFirst+shift, 0, maxFirst)
+					prestackState.compareViewLast = prestackState.compareViewFirst + n
+					ns := prestackState.dragSampleLast - prestackState.dragSampleFirst
+					shiftS := int(math.Round(float64(prestackState.dragY-y) * float64(maxInt(0, prestackState.sampleLast-prestackState.sampleFirst)) / float64(maxInt(1, int(r.Bottom-r.Top)))))
+					maxSample := maxInt(0, prestackState.dataset.Metadata.SamplesPerTrace-1-ns)
+					prestackState.sampleFirst = clampInt(prestackState.dragSampleFirst+shiftS, 0, maxSample)
+					prestackState.sampleLast = prestackState.sampleFirst + ns
+					prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+					startPrestackCompareRender()
+				}
+			} else if dx >= 5 {
+				count := len(prestackState.compareRows)
+				if count > 1 {
+					left := int(panels[prestackState.compareDragPanel].Left)
+					right := int(panels[prestackState.compareDragPanel].Right)
+					a := int(math.Round(float64(clampInt(prestackState.dragX-left, 0, right-left)) / float64(maxInt(1, right-left)) * float64(count-1)))
+					b := int(math.Round(float64(clampInt(x-left, 0, right-left)) / float64(maxInt(1, right-left)) * float64(count-1)))
+					prestackState.compareViewFirst, prestackState.compareViewLast = minInt(a, b), maxInt(a, b)
+					prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+					startPrestackCompareRender()
+				}
+			}
+			prestackState.ctrlClick = false
+			invalidatePrestackScene()
+			return 0
+		}
 		if prestackState.page == 1 {
 			if !prestackState.panning && dx >= 5 && dy >= 5 {
 				a, b := prestackMapWorld(prestackState.dragX, prestackState.dragY)
@@ -3333,6 +4387,15 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		prestackState.dragging = false
 		pReleaseCapture.Call()
+		if prestackState.page == 3 {
+			prestackState.compareViewFirst, prestackState.compareViewLast = 0, -1
+			prestackState.sampleFirst = 0
+			if prestackState.dataset != nil {
+				prestackState.sampleLast = prestackState.dataset.Metadata.SamplesPerTrace - 1
+			}
+			startPrestackCompareRender()
+			return 0
+		}
 		if prestackState.page == 1 && (wParam&prestackMKControl) != 0 {
 			clearPrestackPendingCtrlClick()
 			if kind, pick, ok := prestackHitAcquisition(x, y); ok {

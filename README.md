@@ -6,7 +6,7 @@
 **Seismic Visualization, Reconstruction & Enhancement**<br>
 **震铸地震数据处理平台**
 
-SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与轻量分析工具。当前版本为 **1.9.15**，提供常规二维剖面、规则三维体、二维叠后弯线项目、伪三维幕布和只读 SEG-Y 文件分析。
+SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与轻量分析工具。当前版本为 **1.10.3**，提供常规二维剖面、规则三维体、二维叠后弯线项目、伪三维幕布、叠前道集/QC 和只读 SEG-Y 文件分析。
 
 > 项目此前使用 **Limage** 名称。历史版本文档中的 Limage/Fimage 名称为开发沿革记录；当前产品名称统一为 **SeisForge Studio**。
 
@@ -18,6 +18,7 @@ SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与�
 | 三维数据体 | Inline、Crossline、Time 三正交切片；共享振幅归一化；CPU 深度缓冲；相机、FOV、轴倍率；A/B/差值和三维范围导出 |
 | 二维叠后弯线 | 单文件、多选文件或文件夹项目；XY Geometry 总图；Trace/CDP/Distance 横轴；项目导航与道头坐标识别 |
 | 伪三维幕布 | 多弯线按真实 XY-Time 位置竖立；测线筛选；空间 AOI 与时间窗裁剪；二维联动；范围导出；持久纹理缓存 |
+| 叠前工作区 | CMP、Shot、Receiver、Common Offset 和原始道序浏览；Geometry、QC、只读 A/B Compare 基础、单道分析和道集导出 |
 | SEG-Y 分析 | ASCII/EBCDIC 文本卷头、二进制卷头、240 字节道头、原始 Hex、单道波形、统计和频谱 |
 
 所有数据读取和渲染均在本机完成。程序按需读取道和样点窗口，不要求把完整地震体复制到内存。
@@ -49,7 +50,7 @@ SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与�
 - [当前架构](docs/ARCHITECTURE.md)
 - [兼容性与旧名称迁移](docs/COMPATIBILITY.md)
 - [构建与验证](docs/BUILDING.md)
-- [1.9.15 发布说明](docs/releases/v1.9.15.md)
+- [1.10.3 发布说明](docs/releases/v1.10.3.md)
 - [版本记录](CHANGELOG.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
 - [历史工程文档索引](docs/history/README.md)
@@ -60,14 +61,14 @@ SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与�
 
 ```powershell
 go test ./... -count=1
-.\build_windows_release.cmd -Output SeisForgeStudio_v1.9.15_windows_x64.exe
+.\build_windows_release.cmd -Output SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe
 ```
 
 发布脚本使用 `-H=windowsgui` 构建，并校验 PE Subsystem 为 Windows GUI，双击启动不会附带控制台窗口。
 
 ## 兼容性说明
 
-为继续读取既有用户配置、索引和许可证，1.9.15 暂时保留 `%LOCALAPPDATA%\Limage` 以及旧缓存内部标识。不要仅因产品改名手工移动或重命名这些文件。详情见[兼容性说明](docs/COMPATIBILITY.md)。
+为继续读取既有用户配置、索引和许可证，1.10.3 暂时保留 `%LOCALAPPDATA%\Limage` 以及旧缓存内部标识。不要仅因产品改名手工移动或重命名这些文件。详情见[兼容性说明](docs/COMPATIBILITY.md)。
 
 ## 许可与反馈
 

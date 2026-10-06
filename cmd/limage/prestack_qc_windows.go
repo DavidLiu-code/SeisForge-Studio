@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -70,14 +71,8 @@ func measurePrestackQCText(hdc uintptr, text string, width int) int {
 // painted by the parent window, so the chart area must end before those child
 // windows even while the user is resizing the frame.
 func prestackQCContentRect(r RECT) RECT {
-	content := RECT{Left: 20, Top: 114, Right: r.Right - 20, Bottom: r.Bottom - 42}
-	if content.Right < content.Left+1 {
-		content.Right = content.Left + 1
-	}
-	if content.Bottom < content.Top+1 {
-		content.Bottom = content.Top + 1
-	}
-	return content
+	l := prestackPanelLayoutForSize(int(r.Right), int(r.Bottom), 4)
+	return prestackLayoutRECT(l.Content)
 }
 
 func prestackRangeText(r prestackcore.ValueRange) string {
@@ -235,4 +230,65 @@ func exportPrestackQC() {
 		return
 	}
 	setPrestackStatus("QC 报告已导出：" + path)
+}
+
+func savePrestackCompareReportDialog(owner uintptr, defaultName string) string {
+	buf := make([]uint16, 32768)
+	name := utf16.Encode([]rune(defaultName))
+	name = append(name, 0)
+	copy(buf, name)
+	filter := utf16.Encode([]rune("CSV 匹配报告 (*.csv)\x00*.csv\x00JSON 匹配报告 (*.json)\x00*.json\x00\x00"))
+	of := OPENFILENAME{LStructSize: uint32(unsafe.Sizeof(OPENFILENAME{})), HwndOwner: owner, NFilterIndex: 1,
+		LpstrFilter: uintptr(unsafe.Pointer(&filter[0])), LpstrFile: uintptr(unsafe.Pointer(&buf[0])), NMaxFile: uint32(len(buf)),
+		Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT, LpstrDefExt: uintptr(unsafe.Pointer(u16("csv")))}
+	if ok, _, _ := pGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&of))); ok != 0 {
+		return syscall.UTF16ToString(buf)
+	}
+	return ""
+}
+
+func exportPrestackCompareReport() {
+	if prestackState.dataset == nil || prestackState.compareBDataset == nil {
+		setPrestackStatus("请先加载 B 并完成索引。")
+		return
+	}
+	path := savePrestackCompareReportDialog(prestackHwnd, prestackExportStem()+"_compare.csv")
+	if path == "" {
+		return
+	}
+	aTraceIndices := append([]int64(nil), prestackState.gather.TraceIndices...)
+	bGather := rGatherForSelection(prestackState.compareBIndex, prestackState.selection)
+	report := prestackcore.BuildCompareMatchReportWithOptions(prestackState.compareBMatch.Clone(), prestackState.compareBAxis, prestackcore.CompareMatchReportOptions{
+		APath: prestackState.dataset.Path, BPath: prestackState.compareBDataset.Path,
+		Selection:    prestackSelectionKeyLabel(prestackState.selection),
+		Primary:      prestackGatherKindLabel(prestackState.selection.Type),
+		Secondary:    prestackSecondaryLabel(prestackState.selection),
+		SampleWindow: prestackcore.SampleWindow{Start: prestackState.sampleFirst, End: prestackState.sampleLast},
+		IncludePairs: true,
+		ARecords:     prestackCompareRecords(prestackState.index, aTraceIndices),
+		BRecords:     prestackCompareRecords(prestackState.compareBIndex, bGather.TraceIndices),
+	})
+	var err error
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		var data []byte
+		data, err = report.JSON()
+		if err == nil {
+			err = os.WriteFile(path, data, 0o644)
+		}
+	} else {
+		f, createErr := os.Create(path)
+		if createErr != nil {
+			err = createErr
+		} else {
+			err = prestackcore.WriteCompareMatchReportCSV(f, report)
+			if closeErr := f.Close(); err == nil {
+				err = closeErr
+			}
+		}
+	}
+	if err != nil {
+		message(prestackHwnd, "匹配报告", err.Error(), MB_OK|MB_ICONERROR)
+		return
+	}
+	setPrestackStatus("A/B 匹配报告已导出：" + path)
 }

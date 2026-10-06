@@ -240,7 +240,7 @@ func TestPrestackMVPReleaseIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(build), `SeisForgeStudio_v1.10.3_prestack_qc_x64.exe`) || !strings.Contains(string(build), `-H=windowsgui`) {
+	if !strings.Contains(string(build), `SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe`) || !strings.Contains(string(build), `-H=windowsgui`) {
 		t.Fatal("release script does not target the v1.10.3 Windows GUI artifact")
 	}
 }

@@ -1,1 +1,1 @@
-a133bc31aa7c6233a52d7214cd074f4d16c090039317d368b93dc96de554a62f  SeisForgeStudio_v1.10.3_prestack_qc_x64.exe
+b41314ecb0afa54608f06a659b74edc0d7992051083a2e937329808e5c140f9c  SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe

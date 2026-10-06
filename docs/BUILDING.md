@@ -40,7 +40,7 @@ gofmt -d $goFiles.FullName
 推荐使用仓库脚本：
 
 ```powershell
-.\build_windows_release.cmd -Output SeisForgeStudio_v1.9.15_windows_x64.exe
+.\build_windows_release.cmd -Output SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe
 ```
 
 也可以直接运行 PowerShell 脚本：
@@ -48,7 +48,7 @@ gofmt -d $goFiles.FullName
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\build_windows_release.ps1 `
-  -Output SeisForgeStudio_v1.9.15_windows_x64.exe
+  -Output SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe
 ```
 
 脚本会：
@@ -63,7 +63,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 ```powershell
 go build -trimpath `
   -ldflags="-s -w -H=windowsgui" `
-  -o SeisForgeStudio_v1.9.15_windows_x64.exe `
+  -o SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe `
   .\cmd\limage
 ```
 
@@ -73,7 +73,7 @@ go build -trimpath `
 
 - `go test ./... -count=1` 通过。
 - EXE 的 PE Subsystem 为 Windows GUI (`2`)。
-- 版本号、主窗口、各工作区、About 和激活窗口显示 `SeisForge Studio 1.9.15`。
+- 版本号、主窗口、各工作区、About 和激活窗口显示 `SeisForge Studio 1.10.3`。
 - 首页二维、三维和弯线入口分别进入正确工作区。
 - 普通二维、弯线、真三维、伪三维和 SEG-Y 分析完成一次烟雾测试。
 - SHA-256 与实际 Release 附件重新计算并一同发布。
@@ -82,7 +82,7 @@ go build -trimpath `
 生成校验值：
 
 ```powershell
-Get-FileHash .\SeisForgeStudio_v1.9.15_windows_x64.exe -Algorithm SHA256
+Get-FileHash .\SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe -Algorithm SHA256
 ```
 
 ## 非 Windows 平台

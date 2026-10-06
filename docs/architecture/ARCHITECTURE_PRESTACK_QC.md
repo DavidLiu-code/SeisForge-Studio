@@ -22,4 +22,10 @@ Geometry Source/Receiver clicks update only dynamic overlays. Plain clicks selec
 
 ## Deliberate boundaries
 
-This release does not add NMO, velocity analysis, AVO, interpolation, stacking, SEG-Y write-back, A/B matching or a persistent QC cache. Existing `.lidx`, `.cidx`, `.pidx`, `.ptx`, JSON parameter files and true-3D rendering parameters are unchanged.
+This release adds a read-only A/B matching foundation on the Compare page;
+it does not write matched samples or alter A's gather.  It still does not add
+NMO, velocity analysis, AVO, interpolation, stacking, SEG-Y write-back or a
+persistent QC cache. Existing `.lidx`, `.cidx`, `.pidx`, `.ptx`, JSON
+parameter files and true-3D rendering parameters are unchanged.  Matching
+details and lifecycle boundaries are documented in
+`ARCHITECTURE_PRESTACK_COMPARE.md`.

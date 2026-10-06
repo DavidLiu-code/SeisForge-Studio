@@ -181,12 +181,15 @@ func decodeRecord(trace int64, raw []byte, info segy.Info, m HeaderMapping) Pres
 }
 
 func (p *PrestackIndex) buildTables(ctx context.Context) error {
-	var sourcePresent, receiverPresent, cdpXYPresent, sourceIDs, receiverIDs, cdps bool
+	// Presence is a property of the mapping, not of the decoded coordinate
+	// value.  (0,0) is a legal SEG-Y coordinate, so using a non-zero scan here
+	// would incorrectly mark valid origin traces as missing geometry.
+	sourcePresent := p.Mapping.SourceXByte > 0 && p.Mapping.SourceYByte > 0
+	receiverPresent := p.Mapping.ReceiverXByte > 0 && p.Mapping.ReceiverYByte > 0
+	cdpXYPresent := p.Mapping.CDPXByte > 0 && p.Mapping.CDPYByte > 0
+	var sourceIDs, receiverIDs, cdps bool
 	gridCount := 0
 	for _, r := range p.Records {
-		sourcePresent = sourcePresent || r.SourceX != 0 || r.SourceY != 0
-		receiverPresent = receiverPresent || r.ReceiverX != 0 || r.ReceiverY != 0
-		cdpXYPresent = cdpXYPresent || r.MidpointX != 0 || r.MidpointY != 0
 		sourceIDs = sourceIDs || r.SourceID != 0
 		receiverIDs = receiverIDs || r.ReceiverID != 0
 		cdps = cdps || r.CDP != 0
@@ -194,9 +197,6 @@ func (p *PrestackIndex) buildTables(ctx context.Context) error {
 			gridCount++
 		}
 	}
-	sourcePresent = sourcePresent && p.Mapping.SourceXByte > 0
-	receiverPresent = receiverPresent && p.Mapping.ReceiverXByte > 0
-	cdpXYPresent = cdpXYPresent && p.Mapping.CDPXByte > 0
 	p.UsesGrid = p.Mapping.InlineByte > 0 && gridCount > 0 && gridCount*10 >= len(p.Records)*9
 	if !p.UsesGrid && cdps {
 		p.Warnings = append(p.Warnings, "未发现完整 Inline/Crossline，CMP 使用原始 CDP 字段")
