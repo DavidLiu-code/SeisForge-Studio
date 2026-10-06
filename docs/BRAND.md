@@ -7,7 +7,7 @@
 | 产品名 | **SeisForge Studio** |
 | 英文副标题 | **Seismic Visualization, Reconstruction & Enhancement** |
 | 中文名 | **震铸地震数据处理平台** |
-| 当前版本 | **1.9.15** |
+| 当前版本 | **1.10.4-rc1** |
 | 可执行文件前缀 | `SeisForgeStudio_` |
 
 产品名中的 `SeisForge` 和 `Studio` 均首字母大写，中间保留空格。文件名因跨工具兼容可写为无空格的 `SeisForgeStudio`。不要使用 `Seisforge`、`Seis Forge` 或 `SeisForgeStudio` 作为界面标题。

@@ -2206,7 +2206,7 @@ func receivePrestackCompareB(gen int64) {
 		r = nil
 	}
 	prestackDeliveryMu.Unlock()
-	if r == nil || gen != prestackState.compareBGeneration || r.owner != prestackHwnd || r.ownerToken != prestackState.ownerToken || r.workspaceGeneration != prestackState.workspaceGeneration || r.datasetGeneration != prestackState.datasetGeneration || r.bDatasetGeneration != prestackState.compareBDatasetGeneration || r.selectionGeneration != prestackState.selectionGeneration || r.mappingGeneration != prestackState.compareBMappingGeneration || r.compareModeGeneration != prestackState.compareModeGeneration {
+	if !prestackCompareBResultMatches(r, prestackState, prestackHwnd, gen) {
 		return
 	}
 	prestackState.compareBLoading = false
@@ -2253,6 +2253,22 @@ func receivePrestackCompareB(gen int64) {
 	setPrestackStatus(fmt.Sprintf("B 已加载：%s | 匹配 %d 对；A 顺序保持不变", filepath.Base(r.dataset.Path), len(prestackState.compareBMatch.Pairs)))
 	layoutPrestackControls()
 	redrawPrestackWholeClient()
+}
+
+// prestackCompareBResultMatches is the single delivery predicate for B's
+// metadata index. Keeping it pure makes it possible to test every lifecycle
+// identity without opening a window or a SEG-Y reader. A B result is allowed
+// to arrive while the Compare page is hidden, but it must still belong to the
+// current owner, workspace, A dataset/selection and B mapping generations.
+func prestackCompareBResultMatches(r *prestackCompareBResult, state prestackSession, owner uintptr, generation int64) bool {
+	return r != nil && r.generation == generation && r.owner == owner &&
+		r.ownerToken == state.ownerToken &&
+		r.workspaceGeneration == state.workspaceGeneration &&
+		r.datasetGeneration == state.datasetGeneration &&
+		r.bDatasetGeneration == state.compareBDatasetGeneration &&
+		r.selectionGeneration == state.selectionGeneration &&
+		r.mappingGeneration == state.compareBMappingGeneration &&
+		r.compareModeGeneration == state.compareModeGeneration
 }
 
 func errorText(err error, fallback string) string {

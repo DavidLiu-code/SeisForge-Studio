@@ -269,7 +269,7 @@ const (
 	ID_VOLUME  = 1014
 
 	APP_NAME        = "SeisForge Studio"
-	APP_VERSION     = "1.10.3"
+	APP_VERSION     = "1.10.4-rc1"
 	APP_PROJECT_URL = "https://github.com/DavidLiu-code/SeisForge-Studio"
 
 	IDP_OK       = 2001

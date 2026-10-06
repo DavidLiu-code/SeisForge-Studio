@@ -20,11 +20,25 @@ type Options struct {
 	CoordinateScalar    int16
 	CoordinateUnits     int16
 	Coordinates         []TraceCoordinate
+	TraceHeaders        []TraceHeader
+	SampleIntervalUS    int
 }
 
 type TraceCoordinate struct {
 	X, Y int32
 	CDP  int32
+}
+
+// TraceHeader describes the standard Rev 0/1 metadata words used by the
+// PrestackIndex tests.  When an entry is present in Options.TraceHeaders it
+// replaces the generated header for that physical trace.  Zero values are
+// intentionally written too, so tests can exercise missing/invalid fields.
+type TraceHeader struct {
+	SourceID, ReceiverID, CDP, Offset      int32
+	SourceX, SourceY, ReceiverX, ReceiverY int32
+	Inline, Crossline                      int32
+	Scalar, Units                          int16
+	SampleCount, SampleIntervalUS, DelayMS int
 }
 
 func Write(path string, options Options) error {
@@ -46,7 +60,11 @@ func Write(path string, options Options) error {
 		crosslineByte = 193
 	}
 	header := make([]byte, 3600)
-	binary.BigEndian.PutUint16(header[3216:3218], 2000)
+	dt := options.SampleIntervalUS
+	if dt <= 0 {
+		dt = 2000
+	}
+	binary.BigEndian.PutUint16(header[3216:3218], uint16(dt))
 	binary.BigEndian.PutUint16(header[3220:3222], uint16(samples))
 	binary.BigEndian.PutUint16(header[3224:3226], 5)
 	f, err := os.Create(path)
@@ -67,7 +85,24 @@ func Write(path string, options Options) error {
 	for row := 0; row < rows; row++ {
 		for col := 0; col < cols; col++ {
 			trace := make([]byte, 240+samples*4)
-			if options.RegularGrid {
+			if traceIndex < len(options.TraceHeaders) {
+				h := options.TraceHeaders[traceIndex]
+				putTraceHeader32(trace, 9, h.SourceID)
+				putTraceHeader32(trace, 13, h.ReceiverID)
+				putTraceHeader32(trace, 21, h.CDP)
+				putTraceHeader32(trace, 37, h.Offset)
+				putTraceHeader32(trace, 73, h.SourceX)
+				putTraceHeader32(trace, 77, h.SourceY)
+				putTraceHeader32(trace, 81, h.ReceiverX)
+				putTraceHeader32(trace, 85, h.ReceiverY)
+				putTraceHeader32(trace, 189, h.Inline)
+				putTraceHeader32(trace, 193, h.Crossline)
+				putTraceHeader16(trace, 71, h.Scalar)
+				putTraceHeader16(trace, 89, h.Units)
+				putTraceHeader16(trace, 115, int16(h.SampleCount))
+				putTraceHeader16(trace, 117, int16(h.SampleIntervalUS))
+				putTraceHeader16(trace, 109, int16(h.DelayMS))
+			} else if options.RegularGrid {
 				binary.BigEndian.PutUint32(trace[inlineByte-1:inlineByte+3], uint32(1000+row))
 				binary.BigEndian.PutUint32(trace[crosslineByte-1:crosslineByte+3], uint32(2000+col))
 				if options.DuplicateInlineByte > 0 {
@@ -75,7 +110,7 @@ func Write(path string, options Options) error {
 					binary.BigEndian.PutUint32(trace[duplicate-1:duplicate+3], uint32(1000+row))
 				}
 			}
-			if traceIndex < len(options.Coordinates) {
+			if traceIndex < len(options.Coordinates) && traceIndex >= len(options.TraceHeaders) {
 				xByte, yByte := options.CoordinateXByte, options.CoordinateYByte
 				if xByte == 0 {
 					xByte = 181
@@ -105,4 +140,12 @@ func Write(path string, options Options) error {
 	}
 	ok = true
 	return nil
+}
+
+func putTraceHeader32(trace []byte, bytePos int, value int32) {
+	binary.BigEndian.PutUint32(trace[bytePos-1:bytePos+3], uint32(value))
+}
+
+func putTraceHeader16(trace []byte, bytePos int, value int16) {
+	binary.BigEndian.PutUint16(trace[bytePos-1:bytePos+1], uint16(value))
 }

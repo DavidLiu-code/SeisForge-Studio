@@ -2,6 +2,11 @@
 
 本文件记录 SeisForge Studio 的用户可见变化。项目在 1.9.15 及更早版本中使用 Limage 名称；历史文件名和校验记录保持原样。
 
+## 1.10.4-rc1 — Compare candidate
+
+- 将叠前只读 A/B Compare 基础能力整理为候选版本，包含独立 A/B 元数据索引、稳定匹配、A/B/Δ 显示和 metadata-only CSV/JSON 报告。
+- 增强 synthetic SEG-Y 与异步生命周期验收；不包含 NMO、叠加、振幅处理或 SEG-Y 写回。
+
 ## 1.10.3 — 2026-10-02
 
 - 新增只读叠前 QC 页签、Fold/Offset/Azimuth 分布和 CSV/JSON 报告。

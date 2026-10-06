@@ -53,3 +53,43 @@ func TestPrestackCompareRasterUsesBGRAContract(t *testing.T) {
 		t.Fatalf("palette expansion length=%d, want %d", len(bgra), len(indices)*4)
 	}
 }
+
+func TestPrestackCompareBResultRejectsEveryIdentityChange(t *testing.T) {
+	state := prestackSession{
+		ownerToken: 2, workspaceGeneration: 3, datasetGeneration: 4,
+		selectionGeneration: 5, compareBGeneration: 6,
+		compareBDatasetGeneration: 7, compareBMappingGeneration: 8,
+		compareModeGeneration: 9,
+	}
+	base := &prestackCompareBResult{
+		generation: 10, owner: 17, ownerToken: 2, workspaceGeneration: 3,
+		datasetGeneration: 4, selectionGeneration: 5,
+		bDatasetGeneration: 7, mappingGeneration: 8,
+		compareModeGeneration: 9,
+	}
+	if !prestackCompareBResultMatches(base, state, 17, 10) {
+		t.Fatal("current B result was rejected")
+	}
+	mutate := func(name string, f func(*prestackCompareBResult, *prestackSession, *uintptr, *int64)) {
+		r := *base
+		s := state
+		owner, generation := uintptr(17), int64(10)
+		f(&r, &s, &owner, &generation)
+		if prestackCompareBResultMatches(&r, s, owner, generation) {
+			t.Fatalf("stale B result accepted for %s", name)
+		}
+	}
+	mutate("generation", func(r *prestackCompareBResult, _ *prestackSession, _ *uintptr, _ *int64) { r.generation++ })
+	mutate("owner", func(_ *prestackCompareBResult, _ *prestackSession, owner *uintptr, _ *int64) { *owner = 18 })
+	mutate("owner token", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.ownerToken++ })
+	mutate("workspace", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.workspaceGeneration++ })
+	mutate("A dataset", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.datasetGeneration++ })
+	mutate("selection", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.selectionGeneration++ })
+	mutate("B dataset", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) {
+		s.compareBDatasetGeneration++
+	})
+	mutate("B mapping", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) {
+		s.compareBMappingGeneration++
+	})
+	mutate("compare mode", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.compareModeGeneration++ })
+}

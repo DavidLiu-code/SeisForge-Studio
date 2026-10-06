@@ -1,6 +1,6 @@
 # Prestack Read-only A/B Compare Foundation
 
-Version 1.10.3 adds a read-only A/B foundation to the independent Prestack
+Version 1.10.4-rc1 adds a read-only A/B foundation to the independent Prestack
 workspace.  It is deliberately metadata-first: A and B keep separate
 `SeismicDataset`, reader, mapping, index, cancellation function and
 generation.  Loading or failing B never changes A's gather, QC page or

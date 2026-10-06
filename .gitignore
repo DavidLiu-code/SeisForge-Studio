@@ -18,6 +18,7 @@ dist/
 /.gocache*/
 exports/
 output/
+artifacts/
 
 # Seismic, navigation, and generated cache data
 *.[sS][gG][yY]
