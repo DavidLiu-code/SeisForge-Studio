@@ -1415,6 +1415,28 @@ func prestackValidRenderBuffers(r *prestackRenderResult) bool {
 		len(r.indices) == r.width*r.height && len(r.bgra) == r.width*r.height*4
 }
 
+// acceptPrestackRenderCompletion ends only the current task, including a
+// failed task with no image buffers. Stale failures must never end a newer
+// render. Validate identity first, error second, and success buffers last.
+func acceptPrestackRenderCompletion(r *prestackRenderResult, generation int64, state *prestackSession, current prestackAsyncToken) (bool, error) {
+	if r == nil || state == nil || r.generation != generation || generation != state.renderGeneration ||
+		r.workspaceGeneration != state.workspaceGeneration || !prestackAsyncRenderMatches(r.token, current) {
+		return false, nil
+	}
+	state.rendering = false
+	if state.renderCancel != nil {
+		state.renderCancel()
+		state.renderCancel = nil
+	}
+	if r.err != nil {
+		return true, r.err
+	}
+	if !prestackValidRenderBuffers(r) {
+		return true, fmt.Errorf("道集图像缓冲尺寸不一致：%d×%d，索引 %d，BGRA %d", r.width, r.height, len(r.indices), len(r.bgra))
+	}
+	return true, nil
+}
+
 // Rebuilding a gather may fill thousands of keys, so queue that work after
 // the native popup's accepted selection/close notification.
 func prestackComboSelection(code int) bool {
@@ -2428,6 +2450,17 @@ func prestackOutputColumns(traces []int64, positions []float64, width int) ([]in
 	return out, outPositions
 }
 
+// Image smoothing needs the logical source list, not repeated pixel columns.
+// Sparse smooth support is built in logical-column space; feeding a small
+// gather expanded to thousands of columns creates duplicate physical reads.
+// Nearest-only Wiggle and Offset keep their explicitly chosen display columns.
+func prestackRenderInputTraces(logicalTraces, renderedTraces []int64, mode segy.DisplayMode) []int64 {
+	if mode == segy.DisplayNearest {
+		return renderedTraces
+	}
+	return append([]int64(nil), logicalTraces...)
+}
+
 // clearPrestackImage drops the last exchanged frame before a page/key/range
 // transition.  It is deliberately not called from the native resize path:
 // while the user is dragging the border the last complete frame is the best
@@ -2517,6 +2550,7 @@ func startPrestackRender() {
 		mode = segy.DisplayNearest
 	}
 	tracesForFrame, positionsForFrame := prestackOutputColumns(traces, positions, w)
+	tracesForRender := prestackRenderInputTraces(traces, tracesForFrame, mode)
 	data, owner, palette := prestackState.dataset, prestackHwnd, prestackState.palette
 	workspaceGeneration := prestackState.workspaceGeneration
 	// Keep the displayed gain value exact.  Previously a hidden +0.5% was
@@ -2542,14 +2576,10 @@ func startPrestackRender() {
 		result := &prestackRenderResult{generation: gen, workspaceGeneration: workspaceGeneration, width: w, height: h, traces: tracesForFrame, positions: positionsForFrame, token: token, palette: palette}
 		reader, err := data.OpenReader()
 		if err == nil {
-			// Render exactly the source columns selected for this frame.  In
-			// particular, Wiggle's decimation factor is expressed by
-			// tracesForFrame: passing the complete logical gather here would
-			// make the renderer remap every output column across the full gather
-			// and effectively hide the user's 1x/2x/4x/5x/8x choice.
-			// Keeping the same list in the result mapping also makes Ctrl+click
-			// and hover agree with the trace represented by each raster column.
-			result.indices, result.stats, err = reader.RenderTraceIndices(tracesForFrame, options)
+			// Keep display-column mapping separate from the smoothing sources.
+			// Image reads the logical gather; nearest Wiggle/Offset reads its
+			// explicit raster selection. Both retain the same pick/hover mapping.
+			result.indices, result.stats, err = reader.RenderTraceIndices(tracesForRender, options)
 			reader.Close()
 		}
 		result.err = err
@@ -2580,13 +2610,14 @@ func receivePrestackRender(gen int64) {
 		r = nil
 	}
 	prestackDeliveryMu.Unlock()
-	if r == nil || gen != prestackState.renderGeneration || r.workspaceGeneration != prestackState.workspaceGeneration || !prestackAsyncRenderMatches(r.token, currentPrestackAsyncToken()) || !prestackValidRenderBuffers(r) {
+	accepted, completionErr := acceptPrestackRenderCompletion(r, gen, &prestackState, currentPrestackAsyncToken())
+	if !accepted {
 		return
 	}
-	prestackState.rendering = false
-	if r.err != nil {
+	if completionErr != nil {
 		setPrestackProgress(true, "加载失败")
-		setPrestackStatus("道集显示失败：" + r.err.Error())
+		setPrestackStatus("道集显示失败：" + completionErr.Error())
+		invalidatePrestackScene()
 		return
 	}
 	prestackState.indices = r.indices
@@ -2904,8 +2935,44 @@ func paintPrestackCompare(hdc uintptr) {
 		drawAxisText(hdc, label, int(rr.Left), int(rr.Top)+8, int(rr.Right), int(rr.Top)+30, DT_CENTER|DT_SINGLELINE)
 		imageRect := RECT{Left: rr.Left + 1, Top: rr.Top + 34, Right: rr.Right - 1, Bottom: rr.Bottom - 1}
 		paintPrestackCompareRaster(hdc, imageRect, pixels, prestackState.compareWidth, prestackState.compareHeight)
+		if i == 2 && len(pixels) == 0 {
+			// An intentionally disabled Delta is not a missing render. Put the
+			// reason in the panel itself as well as the compact summary above.
+			text := prestackCompareDeltaEmptyMessage(prestackState)
+			textRect := imageRect
+			textRect.Left += 12
+			textRect.Right -= 12
+			if textRect.Right > textRect.Left {
+				textHeight := measurePrestackQCText(hdc, text, int(textRect.Right-textRect.Left))
+				textRect.Top += int32(maxInt(0, (int(textRect.Bottom-textRect.Top)-textHeight)/2))
+				drawPrestackQCText(hdc, text, textRect, DT_CENTER|prestackDTTop|DT_WORDBREAK)
+			}
+		}
 	}
 	pRestoreDC.Call(hdc, saved)
+}
+
+func prestackCompareDeltaEmptyMessage(state prestackSession) string {
+	if state.compareBLoading {
+		return "Δ 等待计算\r\nB 道头索引正在加载。"
+	}
+	if state.compareBError != "" {
+		return "Δ 未计算\r\n" + state.compareBError
+	}
+	if state.compareBDataset == nil {
+		return "Δ 未计算\r\n请先加载与 A 采样轴兼容的 B 文件。"
+	}
+	if !state.compareBAxis.Compatible {
+		reason := state.compareBAxis.Reason
+		if reason == "" {
+			reason = "当前道集无可用匹配道"
+		}
+		return "Δ 已禁用\r\n" + reason + "\r\nA、B 仍可独立浏览。"
+	}
+	if state.compareRendering {
+		return "正在计算 Δ…"
+	}
+	return "Δ 尚无有效图像\r\n请重新加载或刷新当前道集。"
 }
 
 func prestackComparePanelRects() [3]RECT {
@@ -3282,6 +3349,27 @@ func prestackCompareRenderMatches(r *prestackCompareRenderResult, state prestack
 		currentWidth == r.width && currentHeight == r.height
 }
 
+func acceptPrestackCompareCompletion(r *prestackCompareRenderResult, generation int64, state *prestackSession, owner uintptr, width, height int) (bool, error) {
+	if state == nil || generation != state.compareRenderGeneration || r == nil || r.generation != generation ||
+		!prestackCompareRenderMatches(r, *state, owner, width, height) {
+		return false, nil
+	}
+	state.compareRendering = false
+	if state.compareRenderCancel != nil {
+		state.compareRenderCancel()
+		state.compareRenderCancel = nil
+	}
+	if r.err != nil {
+		return true, r.err
+	}
+	if !prestackValidCompareBuffer(r.a, r.width, r.height, false) ||
+		!prestackValidCompareBuffer(r.b, r.width, r.height, true) ||
+		!prestackValidCompareBuffer(r.delta, r.width, r.height, true) {
+		return true, fmt.Errorf("A/B/Δ 图像缓冲尺寸不一致：%d×%d", r.width, r.height)
+	}
+	return true, nil
+}
+
 func receivePrestackCompareRender(gen int64) {
 	prestackDeliveryMu.Lock()
 	r := prestackPendingCompareRender
@@ -3297,20 +3385,13 @@ func receivePrestackCompareRender(gen int64) {
 		currentWidth = int(panels[0].Right - panels[0].Left)
 		currentHeight = int(panels[0].Bottom - panels[0].Top)
 	}
-	if gen != prestackState.compareRenderGeneration || !prestackCompareRenderMatches(r, prestackState, prestackHwnd, currentWidth, currentHeight) {
+	accepted, completionErr := acceptPrestackCompareCompletion(r, gen, &prestackState, prestackHwnd, currentWidth, currentHeight)
+	if !accepted {
 		return
 	}
-	if !prestackValidCompareBuffer(r.a, r.width, r.height, false) ||
-		!prestackValidCompareBuffer(r.b, r.width, r.height, true) ||
-		!prestackValidCompareBuffer(r.delta, r.width, r.height, true) {
-		return
-	}
-	prestackState.compareRendering = false
-	if prestackState.compareRenderCancel != nil {
-		prestackState.compareRenderCancel = nil
-	}
-	if r.err != nil {
-		setPrestackStatus("A/B 图像渲染失败：" + r.err.Error())
+	if completionErr != nil {
+		setPrestackStatus("A/B 图像渲染失败：" + completionErr.Error())
+		invalidatePrestackScene()
 		return
 	}
 	if r.bErr != nil {

@@ -34,6 +34,40 @@ overwrite, push or release is part of this stage.
 All changes are scoped to Prestack matching, delivery, metadata reports and
 test fixtures. Ordinary 2-D/3-D/crooked/pseudo-3-D renderers are not modified.
 
+## Follow-up: small Gather blank and Delta fixture choice
+
+The user subsequently opened `A.sgy` and reported Gather remaining at
+"正在刷新当前道集". Reader-render regression now reproduces the actual failure:
+60 physical traces were first expanded to approximately 1274 pixel columns;
+the 256-sample window expanded vertically enough to select Adaptive smoothing;
+the sparse smooth support reader rejected repeated physical traces with
+`sparse trace request contains a duplicate`. The completion handler then
+discarded the error because it had no valid pixel buffer and never ended busy.
+
+The Prestack-only correction keeps the unique logical gather as Adaptive
+render input, with a separate output-column mapping for hover/analysis. The
+explicit nearest-only Wiggle and Offset column lists remain unchanged. Current
+errors now end their task and show failure; old-generation errors still cannot
+end a newer task. Successful buffers retain strict length/dimension checks.
+Compare completion uses the same identity-before-error-before-buffer order.
+No shared SEG-Y renderer or ordinary viewer source was changed.
+
+The user's Compare screenshot loaded **`A.sgy` + `B_classified.sgy`**, not the
+positive Delta fixture. `B_classified.sgy` deliberately contains a header with
+invalid sample-axis metadata; "当前道集内部采样轴不一致" is an expected reason
+to disable Delta under the existing strict gather-axis contract. This guard
+was not weakened to fabricate a difference. The empty Delta panel now shows
+the reason directly. For the positive test load **`B_reordered_half.sgy`**;
+use `A_classified.sgy` + `B_classified.sgy` only for classification/negative tests.
+
+Additional Windows UI-free Reader tests cover 60x256 at 1274x662, a short
+100..115 sample window, and a 2474x982 scene, comparing corrected sparse
+pixels byte-for-byte with the existing non-sparse logical-source renderer.
+Tests also cover cancellation/completion state and a real Reader A/B float
+Delta raster expanded to 539x692 with a valid BGRA buffer. These tests are not
+a claim of completed live GUI acceptance; the updated executable still needs
+the user's GUI retest before cache development.
+
 ## Automated evidence
 
 The fixture contains 5 Shots x 12 Receivers, with legal coordinate scalars
@@ -105,7 +139,7 @@ are for manual acceptance and may be removed after the GUI has closed them.
 | `A.sgy` | `B_count_mismatch.sgy` | 60 matched; sample-count mismatch disables Delta |
 | `A.sgy` | `B_interval_mismatch.sgy` | 60 matched; interval mismatch disables Delta |
 | `A.sgy` | `B_delay_mismatch.sgy` | 60 matched; delay/time-origin mismatch disables Delta |
-| `A_classified.sgy` | `B_classified.sgy` | 56/1/1/2/2/1/1 classification counts as above |
+| `A_classified.sgy` | `B_classified.sgy` | 56/1/1/2/2/1/1 counts; intentional invalid-header axis disables Delta |
 
 Default mapping uses 1-based header bytes: SourceID 9, ReceiverID 13,
 CDP 21, signed Offset 37, scalar 71, Source XY 73/77, Receiver XY 81/85,
@@ -161,6 +195,10 @@ An independent development executable may be built without overwriting RC1:
 ```powershell
 .\build_windows_release.ps1 -Output SeisForgeStudio_v1.10.4_compare_acceptance_test_x64.exe
 ```
+
+The small-Gather follow-up uses a separate output name,
+`SeisForgeStudio_v1.10.4_compare_gatherfix_x64.exe`, preserving the previous
+acceptance binary for rollback. Neither development executable replaces RC1.
 
 Its embedded version remains `1.10.4-rc1`. Record its exact source commit,
 Go version, size, SHA-256 and Windows GUI PE subsystem `2` in the ignored
