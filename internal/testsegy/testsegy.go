@@ -22,6 +22,9 @@ type Options struct {
 	Coordinates         []TraceCoordinate
 	TraceHeaders        []TraceHeader
 	SampleIntervalUS    int
+	// SampleValue optionally supplies fixture amplitudes by physical trace and
+	// sample index. A nil function preserves the historical deterministic data.
+	SampleValue func(trace, sample int) float32
 }
 
 type TraceCoordinate struct {
@@ -127,6 +130,9 @@ func Write(path string, options Options) error {
 			}
 			for sample := 0; sample < samples; sample++ {
 				value := float32((row*cols+col)*100 + sample)
+				if options.SampleValue != nil {
+					value = options.SampleValue(traceIndex, sample)
+				}
 				binary.BigEndian.PutUint32(trace[240+sample*4:244+sample*4], math.Float32bits(value))
 			}
 			if _, err := f.Write(trace); err != nil {

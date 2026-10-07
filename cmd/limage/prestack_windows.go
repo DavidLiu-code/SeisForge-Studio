@@ -2261,7 +2261,7 @@ func receivePrestackCompareB(gen int64) {
 // to arrive while the Compare page is hidden, but it must still belong to the
 // current owner, workspace, A dataset/selection and B mapping generations.
 func prestackCompareBResultMatches(r *prestackCompareBResult, state prestackSession, owner uintptr, generation int64) bool {
-	return r != nil && r.generation == generation && r.owner == owner &&
+	return r != nil && r.generation == generation && r.generation == state.compareBGeneration && r.owner == owner &&
 		r.ownerToken == state.ownerToken &&
 		r.workspaceGeneration == state.workspaceGeneration &&
 		r.datasetGeneration == state.datasetGeneration &&

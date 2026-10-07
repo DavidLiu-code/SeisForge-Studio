@@ -249,9 +249,10 @@ func (r PrestackTraceRecord) candidateKeys(idConflict, receiverConflict bool) []
 }
 
 func traceNumber(r PrestackTraceRecord, position int) int64 {
-	// BuildIndex always supplies TraceNumber.  The position fallback keeps the
-	// pure metadata API useful for synthetic records whose number was omitted.
-	if r.TraceNumber == 0 && position != 0 {
+	// Zero is the first physical trace, including after gather reordering. It
+	// must never be replaced by a selection position. Synthetic callers can
+	// explicitly use a negative number when they want the position fallback.
+	if r.TraceNumber < 0 {
 		return int64(position)
 	}
 	return r.TraceNumber

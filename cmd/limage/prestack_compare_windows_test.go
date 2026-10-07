@@ -57,7 +57,7 @@ func TestPrestackCompareRasterUsesBGRAContract(t *testing.T) {
 func TestPrestackCompareBResultRejectsEveryIdentityChange(t *testing.T) {
 	state := prestackSession{
 		ownerToken: 2, workspaceGeneration: 3, datasetGeneration: 4,
-		selectionGeneration: 5, compareBGeneration: 6,
+		selectionGeneration: 5, compareBGeneration: 10,
 		compareBDatasetGeneration: 7, compareBMappingGeneration: 8,
 		compareModeGeneration: 9,
 	}
@@ -80,6 +80,9 @@ func TestPrestackCompareBResultRejectsEveryIdentityChange(t *testing.T) {
 		}
 	}
 	mutate("generation", func(r *prestackCompareBResult, _ *prestackSession, _ *uintptr, _ *int64) { r.generation++ })
+	mutate("current B generation", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) {
+		s.compareBGeneration++
+	})
 	mutate("owner", func(_ *prestackCompareBResult, _ *prestackSession, owner *uintptr, _ *int64) { *owner = 18 })
 	mutate("owner token", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.ownerToken++ })
 	mutate("workspace", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.workspaceGeneration++ })
@@ -92,4 +95,29 @@ func TestPrestackCompareBResultRejectsEveryIdentityChange(t *testing.T) {
 		s.compareBMappingGeneration++
 	})
 	mutate("compare mode", func(_ *prestackCompareBResult, s *prestackSession, _ *uintptr, _ *int64) { s.compareModeGeneration++ })
+}
+
+func TestPrestackCompareBResultRejectsMatchingOldMessageGeneration(t *testing.T) {
+	state := prestackSession{
+		ownerToken: 2, workspaceGeneration: 3, datasetGeneration: 4,
+		selectionGeneration: 5, compareBGeneration: 11,
+		compareBDatasetGeneration: 7, compareBMappingGeneration: 8,
+		compareModeGeneration: 9,
+	}
+	oldResult := &prestackCompareBResult{
+		generation: 10, owner: 17, ownerToken: 2, workspaceGeneration: 3,
+		datasetGeneration: 4, selectionGeneration: 5,
+		bDatasetGeneration: 7, mappingGeneration: 8,
+		compareModeGeneration: 9,
+	}
+	// The queued message and result still agree with each other after B is
+	// replaced or cancelled. Only the current B generation invalidates them.
+	if prestackCompareBResultMatches(oldResult, state, 17, oldResult.generation) {
+		t.Fatal("old B result accepted because its queued message generation matched")
+	}
+	currentResult := *oldResult
+	currentResult.generation = state.compareBGeneration
+	if !prestackCompareBResultMatches(&currentResult, state, 17, currentResult.generation) {
+		t.Fatal("current B result was rejected")
+	}
 }

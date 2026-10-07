@@ -2,6 +2,7 @@ package prestack
 
 import (
 	"bytes"
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
@@ -38,6 +39,50 @@ func TestMatchGatherResultsUsesSelectionOrder(t *testing.T) {
 	r, err := MatchGatherResults(aIndex, GatherResult{TraceIndices: []int64{1, 0}}, bIndex, GatherResult{TraceIndices: []int64{0, 1}})
 	if err != nil || len(r.Pairs) != 2 || r.Pairs[0].ATrace != 11 || r.Pairs[0].BTrace != 20 {
 		t.Fatalf("selection order not preserved: %+v err=%v", r, err)
+	}
+}
+
+func TestMatchRecordsKeepsPhysicalZeroAfterReordering(t *testing.T) {
+	a := []PrestackTraceRecord{matchRecord(3, 1, 3, 1, 2), matchRecord(0, 1, 2, 1, 1)}
+	b := []PrestackTraceRecord{matchRecord(8, 1, 3, 1, 2), matchRecord(0, 1, 2, 1, 1)}
+	result := MatchRecords(a, b)
+	if len(result.Pairs) != 2 || result.Pairs[1].ATrace != 0 || result.Pairs[1].BTrace != 0 {
+		t.Fatalf("physical trace zero became a selection ordinal: %+v", result)
+	}
+	rows := FilterCompareRows(result, a, b, DefaultCompareFilterSet())
+	if len(rows) != 2 || rows[1].ATrace != 0 || rows[1].BTrace != 0 {
+		t.Fatalf("hover/analysis row lost physical trace zero: %+v", rows)
+	}
+	report := BuildCompareMatchReportWithOptions(result, SampleAxisCompatibility{}, CompareMatchReportOptions{IncludePairs: true, ARecords: a, BRecords: b})
+	if report.Pairs[1].ATrace != 0 || report.Pairs[1].BTrace != 0 || report.Pairs[1].AMetadata.TraceNumber != 0 || report.Pairs[1].BMetadata.TraceNumber != 0 {
+		t.Fatalf("report lost physical trace zero: %+v", report.Pairs[1])
+	}
+}
+
+func TestCompareReportPreservesZeroPhysicalTraceJSON(t *testing.T) {
+	for _, classification := range []string{"matched", "a_only", "b_only", "ambiguous_a", "ambiguous_b", "invalid_a", "invalid_b"} {
+		t.Run(classification, func(t *testing.T) {
+			row := CompareMatchReportRow{Classification: classification, ATrace: 0, BTrace: 0}
+			data, err := json.Marshal(row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded struct {
+				ATrace *int64 `json:"a_trace"`
+				BTrace *int64 `json:"b_trace"`
+			}
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			wantA := classification == "matched" || classification == "a_only" || strings.HasSuffix(classification, "_a")
+			wantB := classification == "matched" || classification == "b_only" || strings.HasSuffix(classification, "_b")
+			if (decoded.ATrace != nil) != wantA || (decoded.BTrace != nil) != wantB {
+				t.Fatalf("present physical trace zero or absent side encoded incorrectly: %s", data)
+			}
+			if (decoded.ATrace != nil && *decoded.ATrace != 0) || (decoded.BTrace != nil && *decoded.BTrace != 0) {
+				t.Fatalf("physical trace zero changed in JSON: %s", data)
+			}
+		})
 	}
 }
 

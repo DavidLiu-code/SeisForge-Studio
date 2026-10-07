@@ -23,6 +23,13 @@ duplicate key is reported as ambiguous rather than resolved by map order.
 trace lists; `Clone` and the JSON/CSV report builders return defensive,
 metadata-only copies.
 
+Physical trace numbers are zero-based and independent from positions in a
+sorted selection. Physical trace `0` is always a valid first trace, never a
+missing-number marker. JSON report rows explicitly retain zero on each
+present side while omitting the absent side. Candidate acceptance fixtures
+and the remaining GUI/cache gate are documented in
+[`PRESTACK_COMPARE_ACCEPTANCE.md`](../testing/PRESTACK_COMPARE_ACCEPTANCE.md).
+
 ## Sampling and rendering
 
 `SampleAxisCompatibility` checks sample count, sample interval, trace
@@ -44,6 +51,10 @@ reader state.  Closing B cancels its index/render work and clears pending
 buffers; leaving Compare or switching the workspace uses the same cancellation
 path.  Reports use schema 1.1 and contain paths, selection, axis/window
 compatibility, counts and physical metadata only.
+
+B-index delivery must match both the posted message generation and the
+current B-task generation. Agreement between an old message and an old result
+is not sufficient after closing or replacing B.
 
 The strict sample-count entry point is scoped to Prestack Compare.  The
 historical shared 2-D/3-D residual renderer keeps its previous behavior so
