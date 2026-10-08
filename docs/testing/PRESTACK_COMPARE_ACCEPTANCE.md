@@ -200,6 +200,39 @@ The small-Gather follow-up uses a separate output name,
 `SeisForgeStudio_v1.10.4_compare_gatherfix_x64.exe`, preserving the previous
 acceptance binary for rollback. Neither development executable replaces RC1.
 
+The narrow-window follow-up is also independent:
+`SeisForgeStudio_v1.10.4_narrow_window_x64.exe`. Prestack previously enforced a
+1120 x 700 minimum client area. It now allows a 640 x 480 client area (the
+outer window also includes the Windows frame/title bar). Default creation
+remains 1360 x 880. Ordinary 2-D/3-D/crooked/pseudo-3-D minimum sizes are not
+changed.
+
+At narrow widths a native horizontal scrollbar appears below the tab strip.
+It moves only page controls, preserving the two Gather toolbar rows; it does
+not pan the data, change the selection/sample window, or start a render. The
+Gather/Geometry/Compare/QC scenes use the actual client width, not the toolbar
+virtual width. Widening the window removes the scrollbar when the controls
+fit. Compare explicitly requests more height if three panel titles plus
+positive-height images cannot fit; it does not create inverted raster bounds.
+
+Additional manual checks (not implied by UI-free layout tests):
+
+- Shrink to 640 x 480, then widen through 800, 1100, 1280 and 1360 client
+  pixels; maximize/restore repeatedly. Verify controls and old frames do not
+  leave pixels under the scene/footer as the scrollbar appears/disappears.
+- Scroll to each toolbar end using arrows, track/thumb and keyboard. Check
+  gather type/key, multi-gather, CMP/Offset bin controls, exports, shared
+  Image/Wiggle options, Geometry layers and Compare filters remain accessible.
+- Scroll controls without changing the view: logical trace count, sample
+  window and Ctrl-click physical mapping must remain unchanged. Verify both
+  progress and completion controls stay anchored at the bottom right.
+- Check Compare at 640 x 600 with B loaded, and its height hint at 640 x 480;
+  QC may similarly request more height for its wrapped summary/distributions.
+
+The existing Mapping target/first-label overlap is a separately identified
+layout limitation; this minimum-size follow-up does not change mapping values,
+index rebuild logic or that pre-existing vertical arrangement.
+
 Its embedded version remains `1.10.4-rc1`. Record its exact source commit,
 Go version, size, SHA-256 and Windows GUI PE subsystem `2` in the ignored
 acceptance log; this is not the tagged RC1 binary or a `.pidx` test build.

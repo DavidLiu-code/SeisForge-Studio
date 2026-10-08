@@ -75,6 +75,7 @@ const (
 	IDPRESTACK_COMPARE_FILTER_BONLY
 	IDPRESTACK_COMPARE_FILTER_AMBIGUOUS
 	IDPRESTACK_COMPARE_FILTER_INVALID
+	IDPRESTACK_TOOLBAR_SCROLL
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -117,6 +118,7 @@ const (
 
 type prestackControls struct {
 	home, open, path, tabs, status, progress, progressLabel                                       uintptr
+	toolbarScroll                                                                                 uintptr
 	qcExport, exportGather, exportCSV                                                             uintptr
 	compareOpenB, compareCloseB, compareExport                                                    uintptr
 	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly            uintptr
@@ -162,6 +164,7 @@ type prestackSession struct {
 	loading, rendering, needsIndex, progressDone        bool
 	resizeActive, resizePending                         bool
 	suppressPageRender                                  bool
+	toolbarScrollOffset                                 int
 	viewFirst, viewLast, sampleFirst, sampleLast        int
 	indices, bgra                                       []byte
 	imageWidth, imageHeight                             int
@@ -291,7 +294,18 @@ var (
 	prestackExportDone                                                = make(chan prestackExportResult, 4)
 	prestackProgress                                                  int64
 	prestackRenderSlot                                                = make(chan struct{}, 1)
+	prestackSetScrollInfo                                             = user32.NewProc("SetScrollInfo")
+	prestackGetScrollInfo                                             = user32.NewProc("GetScrollInfo")
 )
+
+// SCROLLINFO is local to Prestack, leaving the legacy viewers' resize and
+// scrolling policies untouched. The native scrollbar handles mouse and keys.
+type prestackScrollInfo struct {
+	Size, Mask uint32
+	Min, Max   int32
+	Page       uint32
+	Pos, Track int32
+}
 
 // MK_CONTROL is included in the low word of wParam for mouse messages.  A
 // plain click keeps the 2-D navigation semantics (a double click resets the
@@ -549,6 +563,7 @@ func createPrestackControls() {
 	u.progressLabel = createCtrl(prestackHwnd, "STATIC", "准备中", WS_CHILD|WS_BORDER|prestackSSCenter, 0, 0, 160, 18, 0)
 	pSendMessageW.Call(u.progress, PBM_SETRANGE, 0, uintptr(uint32(100)<<16))
 	u.tabs = createCtrl(prestackHwnd, "SysTabControl32", "", WS_CHILD|WS_TABSTOP, 0, 0, 900, 28, IDPRESTACK_TABS)
+	u.toolbarScroll = createCtrl(prestackHwnd, "SCROLLBAR", "", WS_CHILD|WS_TABSTOP, 0, 0, 100, 18, IDPRESTACK_TOOLBAR_SCROLL)
 	for i, label := range []string{"道集 Gather", "几何 Geometry", "道头映射 Mapping / Header", "对比 Compare", "QC"} {
 		item := TCITEM{Mask: TCIF_TEXT, PszText: u16(label)}
 		pSendMessageW.Call(u.tabs, TCM_INSERTITEMW, uintptr(i), uintptr(unsafe.Pointer(&item)))
@@ -979,15 +994,46 @@ func layoutPrestackControls() {
 		}
 		pShowWindow.Call(c, uintptr(show))
 	}
+	viewport := prestackToolbarViewportForSize(w, prestackState.page)
+	prestackState.toolbarScrollOffset = prestackToolbarScrollPosition(w, prestackState.page, prestackState.toolbarScrollOffset, 8, 0)
+	info := prestackScrollInfo{Size: uint32(unsafe.Sizeof(prestackScrollInfo{})), Mask: 0x01 | 0x02 | 0x04,
+		Max: int32(viewport.CanvasWidth - 1), Page: uint32(maxInt(1, w)), Pos: int32(prestackState.toolbarScrollOffset)}
+	prestackSetScrollInfo.Call(u.toolbarScroll, 2 /* SB_CTL */, uintptr(unsafe.Pointer(&info)), 1)
+	setText(u.wiggleDecimLabel, map[bool]string{true: "减采样", false: "色标"}[prestackState.display == 1])
+	if u.compareMappingTarget != 0 {
+		enabled := uintptr(0)
+		if prestackState.page == 2 && prestackState.compareBDataset != nil {
+			enabled = 1
+		}
+		pEnableWindow.Call(u.compareMappingTarget, enabled)
+	}
+	prestackControlsLayoutForSize(w, h, u, &prestackState, place)
+}
+
+// Pure control-placement contract: tests exercise the actual native layout,
+// not a second approximation of toolbar bounds. The callback clips controls
+// to the real client; only page controls translate in the virtual viewport.
+func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestackSession, place func(uintptr, int, int, int, int, bool)) {
 	place(u.home, 10, 8, 54, 25, true)
 	place(u.open, 70, 8, 98, 25, true)
 	place(u.path, 180, 12, w-190, 21, true)
 	place(u.tabs, 10, 41, w-20, 28, true)
 	place(u.status, 10, h-27, w-195, 23, true)
-	place(u.progress, w-177, h-23, 165, 16, !prestackState.progressDone)
-	place(u.progressLabel, w-177, h-23, 165, 18, prestackState.progressDone)
-	g := prestackState.page == 0
-	isRaw := g && prestackState.selection.Type == prestackcore.GatherRaw
+	place(u.progress, w-177, h-23, 165, 16, !state.progressDone)
+	place(u.progressLabel, w-177, h-23, 165, 18, state.progressDone)
+	viewport := prestackToolbarViewportForSize(w, state.page)
+	scrollRect := viewport.ScrollRect
+	place(u.toolbarScroll, scrollRect.Left, scrollRect.Top, maxInt(1, scrollRect.width()), maxInt(1, scrollRect.height()), viewport.MaxScroll > 0)
+	clientW := w
+	offset := prestackToolbarScrollPosition(w, state.page, state.toolbarScrollOffset, 8, 0)
+	fixedPlace := place
+	place = func(c uintptr, x, y, ww, hh int, visible bool) {
+		x -= offset
+		fixedPlace(c, x, y+viewport.ExtraTop, ww, hh, visible && x < clientW && x+ww > 0)
+	}
+	w = viewport.CanvasWidth
+	g := state.page == 0
+	isRaw := g && state.selection.Type == prestackcore.GatherRaw
 	x, y := 10, 76
 	// Raw file-order mode uses the same two-row toolbar as the other gather
 	// modes.  Keep the range controls on row one and the common display
@@ -1033,8 +1079,7 @@ func layoutPrestackControls() {
 		x += 92
 		place(u.headers, x, y, 100, 25, true)
 		x += 106
-		wiggle := prestackState.display == 1
-		setText(u.wiggleDecimLabel, map[bool]string{true: "减采样", false: "色标"}[wiggle])
+		wiggle := state.display == 1
 		place(u.wiggleDecimLabel, x, y+2, 62, 22, true)
 		place(u.palette, x+66, y, 145, 24, !wiggle)
 		place(u.wiggleDecim, x+66, y, 145, 24, wiggle)
@@ -1064,7 +1109,7 @@ func layoutPrestackControls() {
 		// inside the client.  Use a compact two-row variant instead of allowing
 		// the last controls to spill into the non-client area (which also caused
 		// stale pixels to appear after a resize).
-		compact := w < 1280
+		compact := w < 1320
 		kindW, prevW, keyW, nextW := 150, 64, 190, 64
 		sortLabelW, sortW, axisW := 42, 124, 110
 		multiLabelW, multiEditW, multiApplyW := 50, 150, 76
@@ -1098,8 +1143,8 @@ func layoutPrestackControls() {
 		x += multiEditW + 4
 		place(u.multiApply, x, y, multiApplyW, 24, g)
 		x += multiApplyW + 8
-		isCMP := g && prestackState.selection.Type == prestackcore.GatherCMP
-		isOffset := g && prestackState.selection.Type == prestackcore.GatherOffset
+		isCMP := g && state.selection.Type == prestackcore.GatherCMP
+		isOffset := g && state.selection.Type == prestackcore.GatherOffset
 		binLabelW, binEditW, binApplyW := 62, 68, 76
 		if compact {
 			binLabelW, binEditW, binApplyW = 52, 58, 68
@@ -1120,8 +1165,7 @@ func layoutPrestackControls() {
 		x += 92
 		place(u.headers, x, y, 100, 25, g)
 		x += 106
-		wiggle := g && prestackState.display == 1
-		setText(u.wiggleDecimLabel, map[bool]string{true: "减采样", false: "色标"}[wiggle])
+		wiggle := g && state.display == 1
 		place(u.wiggleDecimLabel, x, y+2, 62, 22, g)
 		place(u.palette, x+66, y, 145, 24, g && !wiggle)
 		place(u.wiggleDecim, x+66, y, 145, 24, wiggle)
@@ -1138,20 +1182,13 @@ func layoutPrestackControls() {
 		x += 88
 		place(u.exportCSV, x, y, 82, 24, g)
 	}
-	m := prestackState.page == 1
+	m := state.page == 1
 	for i, c := range u.layers {
 		place(c, 10+i*110, 76, 104, 25, m)
 	}
 	place(u.mapReset, 565, 76, 94, 25, m)
-	mapPage := prestackState.page == 2
+	mapPage := state.page == 2
 	place(u.compareMappingTarget, 18, 76, 150, 24, mapPage)
-	if u.compareMappingTarget != 0 {
-		enabled := uintptr(0)
-		if mapPage && prestackState.compareBDataset != nil {
-			enabled = 1
-		}
-		pEnableWindow.Call(u.compareMappingTarget, enabled)
-	}
 	for i := range u.mappingEdits {
 		col, row := i/7, i%7
 		xx := 18 + col*300
@@ -1161,17 +1198,17 @@ func layoutPrestackControls() {
 	}
 	place(u.mappingAuto, 18, 311, 104, 27, mapPage)
 	place(u.mappingApply, 130, 311, 205, 27, mapPage)
-	place(u.mappingText, 18, 349, w-36, h-389, mapPage)
-	place(u.qcExport, 18, 78, 130, 27, prestackState.page == 4)
-	comparePage := prestackState.page == 3
+	fixedPlace(u.mappingText, 18, 349+viewport.ExtraTop, clientW-36, h-389-viewport.ExtraTop, mapPage)
+	place(u.qcExport, 18, 78, 130, 27, state.page == 4)
+	comparePage := state.page == 3
 	place(u.compareOpenB, 18, 78, 92, 27, comparePage)
-	place(u.compareCloseB, 116, 78, 92, 27, comparePage && prestackState.compareBDataset != nil)
-	place(u.compareExport, 214, 78, 145, 27, comparePage && prestackState.compareBDataset != nil)
-	place(u.compareFilterMatched, 370, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
-	place(u.compareFilterAOnly, 436, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
-	place(u.compareFilterBOnly, 502, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
-	place(u.compareFilterAmbiguous, 568, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
-	place(u.compareFilterInvalid, 634, 80, 62, 24, comparePage && prestackState.compareBDataset != nil)
+	place(u.compareCloseB, 116, 78, 92, 27, comparePage && state.compareBDataset != nil)
+	place(u.compareExport, 214, 78, 145, 27, comparePage && state.compareBDataset != nil)
+	place(u.compareFilterMatched, 370, 80, 62, 24, comparePage && state.compareBDataset != nil)
+	place(u.compareFilterAOnly, 436, 80, 62, 24, comparePage && state.compareBDataset != nil)
+	place(u.compareFilterBOnly, 502, 80, 62, 24, comparePage && state.compareBDataset != nil)
+	place(u.compareFilterAmbiguous, 568, 80, 62, 24, comparePage && state.compareBDataset != nil)
+	place(u.compareFilterInvalid, 634, 80, 62, 24, comparePage && state.compareBDataset != nil)
 }
 func prestackSceneRect() RECT {
 	r := clientRect(prestackHwnd)
@@ -2912,6 +2949,13 @@ func paintPrestackCompare(hdc uintptr) {
 	// a conservative summary band; keeping one source of panel rectangles avoids
 	// rejecting every frame because the measured text height differs.
 	panels := prestackComparePanelRects()
+	if panels[0].Bottom <= panels[0].Top {
+		messageRect := r
+		messageRect.Top = int32(minInt(int(r.Bottom), int(r.Top)+textHeight+12))
+		drawPrestackQCText(hdc, "窗口高度不足，请增加高度以显示 A/B/Δ 面板。", messageRect, DT_CENTER|prestackDTTop|DT_WORDBREAK)
+		pRestoreDC.Call(hdc, saved)
+		return
+	}
 	for i, label := range []string{"A（当前道集）", "B（匹配道集）", "Δ（A−B）"} {
 		rr := panels[i]
 		if rr.Right <= rr.Left || rr.Bottom <= rr.Top {
@@ -3004,6 +3048,11 @@ func prestackComparePanelRectsForContent(r RECT, textHeight int) [3]RECT {
 	}
 	rows := (3 + columns - 1) / columns
 	rowHeight := (int(bottom-top) - (rows-1)*12) / rows
+	if rowHeight < 42 || width < 80 {
+		// A panel needs its title plus a positive raster height. A very short
+		// narrow window should show a resize hint, not inverted image bounds.
+		return [3]RECT{}
+	}
 	var out [3]RECT
 	for i := range out {
 		col, row := i%columns, i/columns
@@ -3939,6 +3988,16 @@ func resetPrestackSection() {
 
 func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
+	case WM_HSCROLL:
+		if lParam != 0 && lParam == prestackUI.toolbarScroll {
+			info := prestackScrollInfo{Size: uint32(unsafe.Sizeof(prestackScrollInfo{})), Mask: 0x10 /* SIF_TRACKPOS */}
+			prestackGetScrollInfo.Call(prestackUI.toolbarScroll, 2 /* SB_CTL */, uintptr(unsafe.Pointer(&info)))
+			prestackState.toolbarScrollOffset = prestackToolbarScrollPosition(clientWidth(h), prestackState.page,
+				prestackState.toolbarScrollOffset, int(wParam&0xffff), int(info.Track))
+			layoutPrestackControls()
+			redrawPrestackWholeClient()
+			return 0
+		}
 	case WM_ERASEBKGND:
 		return 1
 	case WM_CANCELMODE:
@@ -3974,9 +4033,9 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_GETMINMAXINFO:
 		if lParam != 0 {
 			mmi := (*MINMAXINFO)(unsafe.Pointer(lParam))
-			// Keep both toolbar rows, the QC summary and a usable chart area
-			// visible while the restored window is being resized.
-			minW, minH := prestackFrameExtent(1120, 700)
+			// Page controls scroll at narrow widths; do not make the toolbars'
+			// virtual width a hard minimum for the entire workspace.
+			minW, minH := prestackFrameExtent(prestackMinClientWidth, prestackMinClientHeight)
 			mmi.PtMinTrackSize.X = int32(minW)
 			mmi.PtMinTrackSize.Y = int32(minH)
 		}

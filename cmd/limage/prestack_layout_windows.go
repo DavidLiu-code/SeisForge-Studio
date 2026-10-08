@@ -20,6 +20,63 @@ type layoutRect struct{ Left, Top, Right, Bottom int }
 func (r layoutRect) width() int  { return r.Right - r.Left }
 func (r layoutRect) height() int { return r.Bottom - r.Top }
 
+const (
+	prestackMinClientWidth      = 640
+	prestackMinClientHeight     = 480
+	prestackToolbarScrollHeight = 22
+)
+
+// Only the native controls use a virtual width. Seismic/QC/Compare content
+// always uses the actual client width; scrolling never changes a gather,
+// sample window, physical-trace mapping or render generation.
+type prestackToolbarViewport struct {
+	CanvasWidth, ExtraTop, MaxScroll int
+	ScrollRect                       layoutRect
+}
+
+func prestackToolbarViewportForSize(width, page int) prestackToolbarViewport {
+	width = maxLayoutInt(1, width)
+	controlWidth := 1100 // compact Gather and Raw toolbars, including bin controls
+	switch page {
+	case 1:
+		controlWidth = 670
+	case 2:
+		controlWidth = 610
+	case 3:
+		controlWidth = 710
+	case 4:
+		controlWidth = 160
+	}
+	v := prestackToolbarViewport{CanvasWidth: maxLayoutInt(width, controlWidth)}
+	v.MaxScroll = v.CanvasWidth - width
+	if v.MaxScroll > 0 {
+		v.ExtraTop = prestackToolbarScrollHeight
+		v.ScrollRect = layoutRect{Left: 10, Top: 72, Right: maxLayoutInt(11, width-10), Bottom: 90}
+	}
+	return v
+}
+
+func prestackToolbarScrollPosition(width, page, position, request, trackPosition int) int {
+	v := prestackToolbarViewportForSize(width, page)
+	switch request {
+	case 0: // SB_LINELEFT
+		position -= 32
+	case 1: // SB_LINERIGHT
+		position += 32
+	case 2: // SB_PAGELEFT
+		position -= maxLayoutInt(32, width/2)
+	case 3: // SB_PAGERIGHT
+		position += maxLayoutInt(32, width/2)
+	case 4, 5: // SB_THUMBPOSITION / SB_THUMBTRACK
+		position = trackPosition
+	case 6: // SB_LEFT
+		position = 0
+	case 7: // SB_RIGHT
+		position = v.MaxScroll
+	}
+	return minLayoutInt(v.MaxScroll, maxLayoutInt(0, position))
+}
+
 func prestackPanelLayoutForSize(width, height, page int) prestackPanelLayout {
 	if width < 1 {
 		width = 1
@@ -27,13 +84,15 @@ func prestackPanelLayoutForSize(width, height, page int) prestackPanelLayout {
 	if height < 1 {
 		height = 1
 	}
-	// Native controls occupy the first 69 client pixels. Gather adds exactly
-	// two 24/25px toolbar rows; all other pages start below the tab strip.
+	// Keep the established two rows. A narrow viewport adds only a thin native
+	// horizontal scrollbar between the tab strip and the controls.
+	extraTop := prestackToolbarViewportForSize(width, page).ExtraTop
 	sceneTop := 119
 	if page == 0 {
 		sceneTop = 156
 	}
-	contentTop := 114
+	sceneTop += extraTop
+	contentTop := 114 + extraTop
 	footerTop := height - 42
 	if footerTop < contentTop+1 {
 		footerTop = contentTop + 1
@@ -60,8 +119,8 @@ func prestackPanelLayoutForSize(width, height, page int) prestackPanelLayout {
 		sceneTop = 0
 	}
 	return prestackPanelLayout{
-		ToolbarTop:    76,
-		ToolbarBottom: 131,
+		ToolbarTop:    76 + extraTop,
+		ToolbarBottom: 132 + extraTop,
 		Content:       layoutRect{Left: contentLeft, Top: minLayoutInt(contentTop, maxLayoutInt(0, height-1)), Right: contentRight, Bottom: maxLayoutInt(1, footerTop)},
 		Scene:         layoutRect{Left: sceneLeft, Top: sceneTop, Right: sceneRight, Bottom: maxLayoutInt(1, sceneBottom)},
 		Footer:        layoutRect{Left: 10, Top: maxLayoutInt(0, height-29), Right: width, Bottom: height},
