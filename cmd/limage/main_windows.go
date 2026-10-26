@@ -48,6 +48,7 @@ var (
 	pGetWindowTextLen         = user32.NewProc("GetWindowTextLengthW")
 	pSendMessageW             = user32.NewProc("SendMessageW")
 	pMoveWindow               = user32.NewProc("MoveWindow")
+	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	pEnableWindow             = user32.NewProc("EnableWindow")
 	pDestroyWindow            = user32.NewProc("DestroyWindow")
 	pSetForeground            = user32.NewProc("SetForegroundWindow")
@@ -140,6 +141,7 @@ const (
 	CW_USEDEFAULT       = 0x80000000
 	SW_HIDE             = 0
 	SW_SHOW             = 5
+	SW_SHOWNA           = 8
 	SW_RESTORE          = 9
 	COLOR_WINDOW        = 5
 	COLOR_BTNFACE       = 15
@@ -1958,6 +1960,7 @@ func main() {
 		if int32(r) <= 0 {
 			break
 		}
+		observePrestackCompareControlKey(m.Hwnd, m.Message, m.WParam)
 		// These windows are reconstructed as ordinary top-level Win32 windows,
 		// not dialog resources. Intercept Enter/Esc here so the behavior matches
 		// the original VCL dialogs even while an EDIT control has keyboard focus.
@@ -2027,7 +2030,7 @@ func main() {
 				// ComboLBox is an owned top-level popup, so the owner/foreground
 				// checks above classify it as Prestack.  Leave its keys alone while
 				// any native combo reports an open drop list.
-				if prestackKeys && !prestackComboDropdownOpen() && handlePrestackShortcut(m.WParam) {
+				if prestackKeys && !prestackTextInput(m.Hwnd) && !prestackComboDropdownOpen() && handlePrestackShortcut(m.WParam) {
 					continue
 				}
 			}

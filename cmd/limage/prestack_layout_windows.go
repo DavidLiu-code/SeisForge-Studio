@@ -43,7 +43,11 @@ func prestackToolbarViewportForSize(width, page int) prestackToolbarViewport {
 	case 2:
 		controlWidth = 610
 	case 3:
-		controlWidth = 710
+		// Compare keeps every action on one horizontally scrollable toolbar row.
+		// The virtual canvas is wider than a narrow client so the native scrollbar
+		// can expose the complete row without shrinking the controls to unreadable
+		// sizes.
+		controlWidth = 1250
 	case 4:
 		controlWidth = 160
 	}

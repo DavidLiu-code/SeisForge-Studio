@@ -53,8 +53,7 @@ func prestackNarrowFakeControls() (*prestackControls, map[uintptr]string) {
 func prestackNarrowPlacements(width, height int, u *prestackControls, state *prestackSession) map[uintptr]prestackNarrowPlacement {
 	placements := make(map[uintptr]prestackNarrowPlacement)
 	prestackControlsLayoutForSize(width, height, u, state, func(handle uintptr, x, y, w, h int, visible bool) {
-		// Some controls are first hidden and then placed for the active page.
-		// Their final placement, not the first callback, is the native contract.
+		// The pure layout commits only the final placement of each control.
 		placements[handle] = prestackNarrowPlacement{layoutRect{x, y, x + w, y + h}, visible}
 	})
 	return placements
@@ -74,7 +73,7 @@ func prestackNarrowFixedControls(u *prestackControls) map[uintptr]bool {
 
 func TestPrestackNarrowViewportAndEveryScrollRequest(t *testing.T) {
 	for _, width := range prestackNarrowWidths {
-		for page, requiredWidth := range []int{1100, 670, 610, 710, 160} {
+		for page, requiredWidth := range []int{1100, 670, 610, 1250, 160} {
 			t.Run(fmt.Sprintf("%d/page%d", width, page), func(t *testing.T) {
 				viewport := prestackToolbarViewportForSize(width, page)
 				wantCanvas := maxLayoutInt(width, requiredWidth)
@@ -188,9 +187,9 @@ func TestPrestackNarrowActualControlsRemainReachableAtScrollEnds(t *testing.T) {
 							}
 						}
 					}
-					if state.page == 0 {
-						// Mapping's pre-existing target/first-label overlap is outside
-						// this repair. Enforce the actual Gather/Raw two-row contract.
+					if state.page == 0 || state.page == 2 {
+						// Both the Gather/Raw toolbars and Mapping's target/fields
+						// must remain disjoint at each horizontal scroll position.
 						for a, pa := range baseline {
 							if !pa.visible || fixed[a] {
 								continue
@@ -200,10 +199,12 @@ func TestPrestackNarrowActualControlsRemainReachableAtScrollEnds(t *testing.T) {
 									continue
 								}
 								if prestackNarrowRectsOverlap(pa.rect, pb.rect) {
-									t.Fatalf("Gather/Raw controls overlap: %s %+v and %s %+v", names[a], pa.rect, names[b], pb.rect)
+									t.Fatalf("page %d controls overlap: %s %+v and %s %+v", state.page, names[a], pa.rect, names[b], pb.rect)
 								}
 							}
 						}
+					}
+					if state.page == 0 {
 						panel := prestackPanelLayoutForSize(width, 480, 0)
 						if left[u.kind].rect.Top != 76+viewport.ExtraTop || left[u.display].rect.Top != 107+viewport.ExtraTop ||
 							panel.ToolbarBottom >= panel.Scene.Top {
@@ -231,12 +232,8 @@ func TestPrestackNarrowPanelsUseClientWidthNotToolbarCanvas(t *testing.T) {
 				t.Fatalf("page%d panels use virtual width or overlap footer at %d: %+v", page, width, left)
 			}
 			if page == 3 {
-				textHeight := 112
-				if left.Content.width() < 900 {
-					textHeight = 176
-				}
-				panels := prestackComparePanelRectsForContent(prestackLayoutRECT(left.Content), textHeight)
-				if panels != prestackComparePanelRectsForContent(prestackLayoutRECT(left.Content), textHeight) {
+				panels := prestackComparePanelRectsForContent(prestackLayoutRECT(left.Content), prestackCompareSummaryHeight)
+				if panels != prestackComparePanelRectsForContent(prestackLayoutRECT(left.Content), prestackCompareSummaryHeight) {
 					t.Fatal("Compare panel dimensions changed with toolbar scroll")
 				}
 				for i, panel := range panels {
@@ -250,22 +247,22 @@ func TestPrestackNarrowPanelsUseClientWidthNotToolbarCanvas(t *testing.T) {
 	}
 }
 
-func TestPrestackNarrowCompareMinimumEmptyAndTallerThreeRows(t *testing.T) {
+func TestPrestackNarrowCompareShortEmptyAndMinimumThreeRows(t *testing.T) {
 	for _, tc := range []struct {
 		height int
 		empty  bool
-	}{{480, true}, {600, false}} {
+	}{{240, true}, {480, false}, {600, false}} {
 		layout := prestackPanelLayoutForSize(640, tc.height, 3)
-		panels := prestackComparePanelRectsForContent(prestackLayoutRECT(layout.Content), 176)
+		panels := prestackComparePanelRectsForContent(prestackLayoutRECT(layout.Content), prestackCompareSummaryHeight)
 		if tc.empty {
 			if panels != ([3]RECT{}) {
-				t.Fatalf("640x480 should show increase-height empty state, not unusable panels: %+v", panels)
+				t.Fatalf("640x%d should show increase-height empty state, not unusable panels: %+v", tc.height, panels)
 			}
 			continue
 		}
 		for i, panel := range panels {
 			if panel.Bottom-panel.Top < 42 || int(panel.Right-panel.Left) != layout.Content.width() {
-				t.Fatalf("640x600 panel%d cannot contain its title/image: %+v", i, panel)
+				t.Fatalf("640x%d panel%d cannot contain its title/image: %+v", tc.height, i, panel)
 			}
 			if i > 0 && (panels[i-1].Bottom >= panel.Top || panels[i-1].Left != panel.Left || panels[i-1].Right != panel.Right) {
 				t.Fatalf("narrow Compare did not stack three separate rows: %+v", panels)
