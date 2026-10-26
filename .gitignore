@@ -28,6 +28,7 @@ artifacts/
 *.lidx
 *.cidx
 *.ptx
+*.pidx
 
 # Runtime logs, crash output, and temporary files
 *.log

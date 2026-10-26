@@ -67,6 +67,13 @@ type File struct {
 	f    *os.File
 	Info Info
 
+	// Immutable opening snapshot used only by metadata-cache identity checks.
+	// Existing readers/renderers retain their original Info and read semantics.
+	metadataOpenStat   os.FileInfo
+	metadataOpenInfo   Info
+	metadataOpenPath   string
+	metadataOpenBinary [400]byte
+
 	mappingMu       sync.Mutex
 	mappingData     []byte
 	mappingClose    func() error
@@ -113,11 +120,13 @@ func Open(path string) (*File, error) {
 		f.Close()
 		return nil, errors.New("no complete traces found")
 	}
-	return &File{f: f, Info: Info{
+	reader := &File{f: f, Info: Info{
 		Path: path, FileSize: st.Size(), Endian: endian, SampleIntervalUS: dt,
 		SamplesPerTrace: ns, FormatCode: format, BytesPerSample: bps,
 		ExtendedTextHeaders: max(ext, 0), DataStart: dataStart, TraceBytes: traceBytes, TraceCount: ntr,
-	}}, nil
+	}}
+	reader.captureMetadataOpen(st, hdr)
+	return reader, nil
 }
 
 func (s *File) Close() error {

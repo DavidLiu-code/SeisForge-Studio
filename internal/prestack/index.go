@@ -22,6 +22,20 @@ import (
 // for all reads to finish before returning, so the caller can safely Close its
 // own Reader immediately on return. No partial index is published on failure.
 func BuildIndex(ctx context.Context, reader *segy.File, mapping HeaderMapping, progress func(IndexProgress)) (*PrestackIndex, error) {
+	p, err := scanIndex(ctx, reader, mapping, progress)
+	if err != nil {
+		return nil, err
+	}
+	if err := rebuildIndex(ctx, p, int64(len(p.Records)), progress); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// scanIndex returns only decoded scan-stage metadata. In particular MidpointX/Y
+// still contain the raw mapped CDP coordinates, not the derived Source/Receiver
+// midpoint. Cache writers must preserve these records before rebuildIndex.
+func scanIndex(ctx context.Context, reader *segy.File, mapping HeaderMapping, progress func(IndexProgress)) (*PrestackIndex, error) {
 	if reader == nil {
 		return nil, errors.New("nil SEG-Y reader")
 	}
@@ -102,19 +116,41 @@ func BuildIndex(ctx context.Context, reader *segy.File, mapping HeaderMapping, p
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			if progress != nil {
-				progress(IndexProgress{Done: n, Scanned: n, Total: n, Stage: "建立道集"})
-			}
-			if err := p.buildTables(ctx); err != nil {
-				return nil, err
-			}
-			p.quality = computeQualityStats(p)
-			if progress != nil {
-				progress(IndexProgress{Done: n, Scanned: n, Total: n, Stage: "完成"})
-			}
 			return p, nil
 		}
 	}
+}
+
+// rebuildIndex is shared by cold scans and cache loads. p must be a new index
+// containing owned scan-stage Records and the source/mapping/binary-axis fields
+// only: buildTables derives geometry in place. Never reuse a published index or
+// serialize its derived records as scan-stage metadata. scanned is zero for a
+// cache hit, and controls progress accounting rather than index semantics.
+func rebuildIndex(ctx context.Context, p *PrestackIndex, scanned int64, progress func(IndexProgress)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p == nil || len(p.Records) == 0 {
+		return errors.New("empty scan-stage index")
+	}
+	n := int64(len(p.Records))
+	if progress != nil {
+		progress(IndexProgress{Done: n, Scanned: scanned, Total: n, Stage: "建立道集"})
+	}
+	if err := p.buildTables(ctx); err != nil {
+		return err
+	}
+	p.quality = computeQualityStats(p)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if progress != nil {
+		progress(IndexProgress{Done: n, Scanned: scanned, Total: n, Stage: "完成"})
+	}
+	return nil
 }
 
 func word32(raw []byte, b int, e segy.Endian) int32 {

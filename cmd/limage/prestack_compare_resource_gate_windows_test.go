@@ -71,6 +71,7 @@ func (c *compareResourceCancelContext) Err() error {
 }
 
 func TestPrestackCompareBProductionIndexReleasesRealReaders(t *testing.T) {
+	t.Setenv("SEISFORGE_PRESTACK_CACHE_BYPASS", "1")
 	aPath, bPath := compareResourceFixture(t, "A.sgy"), compareResourceFixture(t, "B.sgy")
 	a, err := dataset.NewManager().Open(aPath)
 	if err != nil {
@@ -131,6 +132,7 @@ func TestPrestackCompareBProductionIndexReleasesRealReaders(t *testing.T) {
 }
 
 func TestPrestackCompareRepeatedCloseCancelsIndexAndDropsPendingBuffers(t *testing.T) {
+	t.Setenv("SEISFORGE_PRESTACK_CACHE_BYPASS", "1")
 	savedState, savedUI, savedHwnd := prestackState, prestackUI, prestackHwnd
 	prestackDeliveryMu.Lock()
 	savedB, savedRender, savedDelivery := prestackPendingCompareB, prestackPendingCompareRender, prestackDeliveryCompareBGeneration

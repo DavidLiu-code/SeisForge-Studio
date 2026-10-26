@@ -32,6 +32,10 @@ func dispatchPrestackMappingAuto(state prestackSession, detectA func(), detectB 
 // for cancellation and low-confidence mapping detection. It only writes its
 // private result, never A or the window's mutable session.
 func buildPrestackCompareBIndex(ctx context.Context, result *prestackCompareBResult) {
+	buildPrestackCompareBIndexCached(ctx, result, prestackcore.CacheOptions{}, nil)
+}
+
+func buildPrestackCompareBIndexCached(ctx context.Context, result *prestackCompareBResult, options prestackcore.CacheOptions, progress func(prestackcore.IndexProgress)) {
 	if result == nil {
 		return
 	}
@@ -42,7 +46,7 @@ func buildPrestackCompareBIndex(ctx context.Context, result *prestackCompareBRes
 	if result.err != nil {
 		return
 	}
-	reader, err := result.dataset.OpenReader()
+	reader, err := openPrestackDatasetReader(result.dataset)
 	if err != nil {
 		result.err = err
 		return
@@ -59,7 +63,7 @@ func buildPrestackCompareBIndex(ctx context.Context, result *prestackCompareBRes
 			return
 		}
 	}
-	result.index, result.err = prestackcore.BuildIndex(ctx, reader, result.mapping, nil)
+	result.index, result.cacheStats, result.err = prestackcore.BuildIndexCached(ctx, reader, result.mapping, options, progress)
 }
 
 // Persistent metadata identity is checked separately from presentation. The

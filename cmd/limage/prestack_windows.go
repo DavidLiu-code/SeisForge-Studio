@@ -93,11 +93,12 @@ const (
 	WM_PRESTACK_RESIZE_FLUSH = WM_USER + 613
 	// Post selection work so key-list rebuilding/render planning starts after
 	// the native control has completed its notification transaction.
-	WM_PRESTACK_COMBO_COMMIT    = WM_USER + 614
-	WM_PRESTACK_COMPARE_B_READY = WM_USER + 617
-	WM_PRESTACK_COMPARE_RENDER  = WM_USER + 618
-	WM_TIMER                    = 0x0113
-	prestackCtrlClickTimer      = 1
+	WM_PRESTACK_COMBO_COMMIT       = WM_USER + 614
+	WM_PRESTACK_COMPARE_B_READY    = WM_USER + 617
+	WM_PRESTACK_COMPARE_RENDER     = WM_USER + 618
+	WM_PRESTACK_COMPARE_B_PROGRESS = WM_USER + 619
+	WM_TIMER                       = 0x0113
+	prestackCtrlClickTimer         = 1
 	// Mouse capture belongs to the scene only while a drag is active.  A
 	// native combo box takes capture while its drop list is open; without
 	// clearing our scene state when that happens, subsequent clicks are still
@@ -146,6 +147,7 @@ type prestackControls struct {
 type prestackSession struct {
 	dataset                                             *dataset.SeismicDataset
 	index                                               *prestackcore.PrestackIndex
+	indexCacheStats                                     prestackcore.IndexBuildStats
 	mapping                                             prestackcore.HeaderMapping
 	detection                                           prestackcore.MappingDetection
 	selection                                           prestackcore.GatherSelection
@@ -202,6 +204,7 @@ type prestackSession struct {
 	// metadata-only and are never used to mutate A's gather or renderer.
 	compareBDataset                               *dataset.SeismicDataset
 	compareBIndex                                 *prestackcore.PrestackIndex
+	compareBCacheStats                            prestackcore.IndexBuildStats
 	compareBMapping                               prestackcore.HeaderMapping
 	compareBDetection                             prestackcore.MappingDetection
 	compareBNeedsConfirmation                     bool
@@ -240,6 +243,7 @@ type prestackIndexResult struct {
 	token      prestackAsyncToken
 	generation int64
 	index      *prestackcore.PrestackIndex
+	cacheStats prestackcore.IndexBuildStats
 	detection  prestackcore.MappingDetection
 	detected   bool
 	err        error
@@ -253,6 +257,7 @@ type prestackCompareBResult struct {
 	owner                                                                                     uintptr
 	dataset                                                                                   *dataset.SeismicDataset
 	index                                                                                     *prestackcore.PrestackIndex
+	cacheStats                                                                                prestackcore.IndexBuildStats
 	mapping                                                                                   prestackcore.HeaderMapping
 	path                                                                                      string
 	detected                                                                                  bool
@@ -309,7 +314,6 @@ var (
 	prestackPendingCompareB                                           *prestackCompareBResult
 	prestackPendingCompareRender                                      *prestackCompareRenderResult
 	prestackExportDone                                                = make(chan prestackExportResult, 4)
-	prestackProgress                                                  int64
 	prestackRenderSlot                                                = make(chan struct{}, 1)
 	prestackSetScrollInfo                                             = user32.NewProc("SetScrollInfo")
 	prestackGetScrollInfo                                             = user32.NewProc("GetScrollInfo")
@@ -1810,6 +1814,7 @@ func cancelPrestackJobs() {
 	prestackPendingRender = nil
 	prestackPendingCompareB = nil
 	prestackPendingCompareRender = nil
+	prestackPendingCacheProgressA, prestackPendingCacheProgressB = nil, nil
 	prestackDeliveryMu.Unlock()
 	prestackState.compareRendering = false
 	prestackState.compareA, prestackState.compareB, prestackState.compareDelta = nil, nil, nil
@@ -1838,45 +1843,23 @@ func startPrestackIndex(detect bool) {
 	prestackState.needsIndex = false
 	data, mapping, owner := prestackState.dataset, prestackState.mapping, prestackHwnd
 	prestackState.index = nil
+	prestackState.indexCacheStats = prestackcore.IndexBuildStats{}
 	clearPrestackImage()
 	prestackState.gather = prestackcore.GatherResult{}
-	setPrestackStatus("正在检查道头映射；仅扫描道头，不读取全文件振幅…")
-	setPrestackProgress(false, "扫描道头")
+	setPrestackStatus("正在检查道头映射与元数据缓存；不读取全文件振幅…")
+	setPrestackProgress(false, "检查缓存")
 	pSendMessageW.Call(prestackUI.progress, PBM_SETPOS, 0, 0)
 	invalidatePrestackScene()
 	go func() {
 		result := &prestackIndexResult{generation: gen, token: token}
-		reader, err := data.OpenReader()
-		if err != nil {
-			result.err = err
-		} else {
-			defer reader.Close()
-			if detect {
-				result.detected = true
-				result.detection, err = prestackcore.DetectHeaderMapping(ctx, reader)
-				mapping = result.detection.Mapping
+		last, lastStage := time.Time{}, ""
+		buildPrestackAIndex(ctx, data, mapping, detect, prestackcore.CacheOptions{}, func(p prestackcore.IndexProgress) {
+			if p.Stage == lastStage && time.Since(last) < 50*time.Millisecond && p.Done < p.Total {
+				return
 			}
-			if err == nil && (!detect || !result.detection.NeedsConfirmation) {
-				last := time.Time{}
-				result.index, err = prestackcore.BuildIndex(ctx, reader, mapping, func(p prestackcore.IndexProgress) {
-					if time.Since(last) < 50*time.Millisecond && p.Done < p.Total {
-						return
-					}
-					last = time.Now()
-					pct := int64(0)
-					if p.Total > 0 {
-						pct = p.Done * 100 / p.Total
-					}
-					prestackDeliveryMu.Lock()
-					if prestackDeliveryHwnd == owner && prestackDeliveryOwnerToken == token.ownerToken && prestackDeliveryIndexGeneration == gen && ctx.Err() == nil {
-						atomic.StoreInt64(&prestackProgress, pct)
-						pPostMessageW.Call(owner, WM_PRESTACK_PROGRESS, uintptr(gen), 0)
-					}
-					prestackDeliveryMu.Unlock()
-				})
-			}
-			result.err = err
-		}
+			last, lastStage = time.Now(), p.Stage
+			publishPrestackCacheProgressA(ctx, token, gen, p)
+		}, result)
 		if ctx.Err() != nil {
 			return
 		}
@@ -1894,6 +1877,9 @@ func startPrestackIndex(detect bool) {
 }
 func receivePrestackIndex(gen int64) {
 	prestackDeliveryMu.Lock()
+	if prestackPendingCacheProgressA != nil && prestackPendingCacheProgressA.generation == gen {
+		prestackPendingCacheProgressA = nil
+	}
 	r := prestackPendingIndex
 	if r != nil && r.generation == gen {
 		prestackPendingIndex = nil
@@ -1928,12 +1914,14 @@ func receivePrestackIndex(gen int64) {
 		return
 	}
 	prestackState.index = r.index
+	prestackState.indexCacheStats = r.cacheStats
 	prestackState.mapBounds = r.index.Bounds
 	setText(prestackUI.mappingText, prestackMappingSummary(prestackState))
 	pSendMessageW.Call(prestackUI.progress, PBM_SETPOS, 100, 0)
 	setPrestackProgress(false, "读取道集")
 	setPrestackPage(0)
 	selectPrestackGatherType(prestackcore.GatherCMP)
+	setPrestackStatus("A " + prestackIndexCacheSummary(r.cacheStats) + " | 正在读取当前道集")
 }
 func applyPrestackMapping() {
 	m := prestackState.mapping
@@ -2311,6 +2299,7 @@ func startPrestackCompareBTask(path string, requested *prestackcore.HeaderMappin
 	prestackState.compareBError = ""
 	prestackState.compareBDataset = nil
 	prestackState.compareBIndex = nil
+	prestackState.compareBCacheStats = prestackcore.IndexBuildStats{}
 	prestackState.compareBMatch = prestackcore.CompareMatchResult{}
 	prestackState.compareBAxis = prestackcore.SampleAxisCompatibility{}
 	if requested != nil {
@@ -2330,13 +2319,22 @@ func startPrestackCompareBTask(path string, requested *prestackcore.HeaderMappin
 	prestackDeliveryMu.Lock()
 	prestackDeliveryCompareBGeneration = gen
 	prestackPendingCompareB = nil
+	prestackPendingCacheProgressB = nil
 	prestackDeliveryMu.Unlock()
-	setPrestackStatus("正在加载 B：" + filepath.Base(path) + "（仅扫描道头）")
+	setPrestackStatus("正在加载 B：" + filepath.Base(path) + "（检查元数据缓存）")
 	layoutPrestackControls()
 	redrawPrestackWholeClient()
 	go func() {
 		result := &prestackCompareBResult{generation: gen, datasetGeneration: datasetGeneration, aMappingGeneration: aMappingGeneration, bDatasetGeneration: bDatasetGeneration, selectionGeneration: selectionGeneration, mappingGeneration: mappingGeneration, compareModeGeneration: compareModeGeneration, workspaceGeneration: workspaceGeneration, ownerToken: ownerToken, owner: owner, mapping: mapping, path: path, detected: detect}
-		buildPrestackCompareBIndex(ctx, result)
+		progressToken := *result
+		last, lastStage := time.Time{}, ""
+		buildPrestackCompareBIndexCached(ctx, result, prestackcore.CacheOptions{}, func(p prestackcore.IndexProgress) {
+			if p.Stage == lastStage && time.Since(last) < 50*time.Millisecond && p.Done < p.Total {
+				return
+			}
+			last, lastStage = time.Now(), p.Stage
+			publishPrestackCacheProgressB(ctx, progressToken, p)
+		})
 		if ctx.Err() != nil {
 			return
 		}
@@ -2370,6 +2368,7 @@ func cancelPrestackCompareB() {
 	prestackState.compareBDetection = prestackcore.MappingDetection{}
 	prestackState.compareBDataset = nil
 	prestackState.compareBIndex = nil
+	prestackState.compareBCacheStats = prestackcore.IndexBuildStats{}
 	prestackState.compareBError = ""
 	prestackState.compareBMatch = prestackcore.CompareMatchResult{}
 	prestackState.compareBAxis = prestackcore.SampleAxisCompatibility{}
@@ -2377,6 +2376,7 @@ func cancelPrestackCompareB() {
 	prestackDeliveryMu.Lock()
 	prestackDeliveryCompareBGeneration = prestackState.compareBGeneration
 	prestackPendingCompareB = nil
+	prestackPendingCacheProgressB = nil
 	prestackDeliveryMu.Unlock()
 	layoutPrestackControls()
 	redrawPrestackWholeClient()
@@ -2398,6 +2398,9 @@ func closePrestackCompareB(renderA func()) {
 
 func receivePrestackCompareB(gen int64) {
 	prestackDeliveryMu.Lock()
+	if prestackPendingCacheProgressB != nil && prestackPendingCacheProgressB.generation == gen {
+		prestackPendingCacheProgressB = nil
+	}
 	r := prestackPendingCompareB
 	if r != nil && r.generation == gen {
 		prestackPendingCompareB = nil
@@ -2439,6 +2442,7 @@ func receivePrestackCompareB(gen int64) {
 	}
 	prestackState.compareBDataset = r.dataset
 	prestackState.compareBIndex = r.index
+	prestackState.compareBCacheStats = r.cacheStats
 	prestackState.compareBMapping = r.mapping
 	prestackState.compareBError = ""
 	if prestackState.mappingTargetB {
@@ -2468,7 +2472,7 @@ func receivePrestackCompareB(gen int64) {
 	if prestackState.page == 3 {
 		startPrestackCompareRender()
 	}
-	setPrestackStatus(fmt.Sprintf("B 已加载：%s | 匹配 %d 对；A 顺序保持不变", filepath.Base(r.dataset.Path), len(prestackState.compareBMatch.Pairs)))
+	setPrestackStatus(fmt.Sprintf("B %s：%s | 匹配 %d 对；A 顺序保持不变", prestackIndexCacheSummary(r.cacheStats), filepath.Base(r.dataset.Path), len(prestackState.compareBMatch.Pairs)))
 	layoutPrestackControls()
 	redrawPrestackWholeClient()
 }
@@ -2842,17 +2846,17 @@ func receivePrestackRender(gen int64) {
 		}
 	}
 	if prestackState.selection.Type == prestackcore.GatherRaw {
-		setPrestackStatus(fmt.Sprintf("完成 | 原始叠前道序 | 道 %d–%d（%d 道） | 样点 %d–%d | %s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", prestackState.gather.RawTraceStart+1, prestackState.gather.RawTraceEnd, len(prestackState.gather.TraceIndices), prestackState.sampleFirst+1, prestackState.sampleLast+1, offsetLabel, gainHint))
+		setPrestackStatus(fmt.Sprintf("A %s | 原始叠前道序 | 道 %d–%d（%d 道） | 样点 %d–%d | %s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", prestackIndexCacheSummary(prestackState.indexCacheStats), prestackState.gather.RawTraceStart+1, prestackState.gather.RawTraceEnd, len(prestackState.gather.TraceIndices), prestackState.sampleFirst+1, prestackState.sampleLast+1, offsetLabel, gainHint))
 	} else if prestackState.selection.Key.All {
 		keyText := "全部范围（全文件聚合）"
 		if len(prestackState.selection.Keys) > 0 {
 			keyText = fmt.Sprintf("多道集 %d 组（全文件范围内）", len(prestackState.selection.Keys))
 		}
-		setPrestackStatus(fmt.Sprintf("完成 | 一级 %s·%s | 二级 %s | 物理道 %d | 显示列 %d | %s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", kindLabel, keyText, prestackSecondaryLabel(prestackState.selection), len(prestackState.gather.TraceIndices), r.width, offsetLabel, gainHint))
+		setPrestackStatus(fmt.Sprintf("A %s | 一级 %s·%s | 二级 %s | 物理道 %d | 显示列 %d | %s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", prestackIndexCacheSummary(prestackState.indexCacheStats), kindLabel, keyText, prestackSecondaryLabel(prestackState.selection), len(prestackState.gather.TraceIndices), r.width, offsetLabel, gainHint))
 	} else if prestackState.selection.Type == prestackcore.GatherOffset {
-		setPrestackStatus(fmt.Sprintf("完成 | 一级 %s %s | 二级 %s | 实际 %s | %d 道 | Fold %d%s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", kindLabel, prestackSelectionKeyLabel(prestackState.selection), prestackSecondaryLabel(prestackState.selection), offsetLabel, len(prestackState.gather.TraceIndices), len(prestackState.gather.TraceIndices), keyPosition, gainHint))
+		setPrestackStatus(fmt.Sprintf("A %s | 一级 %s %s | 二级 %s | 实际 %s | %d 道 | Fold %d%s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", prestackIndexCacheSummary(prestackState.indexCacheStats), kindLabel, prestackSelectionKeyLabel(prestackState.selection), prestackSecondaryLabel(prestackState.selection), offsetLabel, len(prestackState.gather.TraceIndices), len(prestackState.gather.TraceIndices), keyPosition, gainHint))
 	} else {
-		setPrestackStatus(fmt.Sprintf("完成 | 一级 %s %s | 二级 %s | %d 道 | Fold %d | %s%s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", kindLabel, prestackSelectionKeyLabel(prestackState.selection), prestackSecondaryLabel(prestackState.selection), len(prestackState.gather.TraceIndices), len(prestackState.gather.TraceIndices), offsetLabel, keyPosition, gainHint))
+		setPrestackStatus(fmt.Sprintf("A %s | 一级 %s %s | 二级 %s | %d 道 | Fold %d | %s%s%s | 左拖缩放，右拖平移，双击复位，Ctrl+单击查看真实道", prestackIndexCacheSummary(prestackState.indexCacheStats), kindLabel, prestackSelectionKeyLabel(prestackState.selection), prestackSecondaryLabel(prestackState.selection), len(prestackState.gather.TraceIndices), len(prestackState.gather.TraceIndices), offsetLabel, keyPosition, gainHint))
 	}
 	invalidatePrestackScene()
 }
@@ -4341,11 +4345,10 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		commitPrestackCombo(int(wParam))
 		return 0
 	case WM_PRESTACK_PROGRESS:
-		if int64(wParam) == prestackState.indexGeneration {
-			pct := atomic.LoadInt64(&prestackProgress)
-			pSendMessageW.Call(prestackUI.progress, PBM_SETPOS, uintptr(pct), 0)
-			setPrestackStatus(fmt.Sprintf("正在扫描叠前道头 %d%%（不读取振幅）", pct))
-		}
+		receivePrestackCacheProgress(int64(wParam), false)
+		return 0
+	case WM_PRESTACK_COMPARE_B_PROGRESS:
+		receivePrestackCacheProgress(int64(wParam), true)
 		return 0
 	case WM_DROPFILES:
 		handleWorkspaceDrop(wParam, workspaceModePrestack)
