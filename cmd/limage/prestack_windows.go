@@ -80,6 +80,7 @@ const (
 	IDPRESTACK_COMPARE_RANGE_MAX
 	IDPRESTACK_COMPARE_RANGE_APPLY
 	IDPRESTACK_TOOLBAR_SCROLL
+	IDPRESTACK_FIGURE_EXPORT
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -97,6 +98,8 @@ const (
 	WM_PRESTACK_COMPARE_B_READY    = WM_USER + 617
 	WM_PRESTACK_COMPARE_RENDER     = WM_USER + 618
 	WM_PRESTACK_COMPARE_B_PROGRESS = WM_USER + 619
+	WM_PRESTACK_FIGURE_DONE        = WM_USER + 620
+	WM_PRESTACK_FIGURE_PROGRESS    = WM_USER + 621
 	WM_TIMER                       = 0x0113
 	prestackCtrlClickTimer         = 1
 	// Mouse capture belongs to the scene only while a drag is active.  A
@@ -125,6 +128,7 @@ type prestackControls struct {
 	home, open, path, tabs, status, progress, progressLabel                                       uintptr
 	toolbarScroll                                                                                 uintptr
 	qcExport, exportGather, exportCSV                                                             uintptr
+	figureExport                                                                                  uintptr
 	compareOpenB, compareCloseB, compareExport                                                    uintptr
 	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly            uintptr
 	compareFilterAmbiguous, compareFilterInvalid                                                  uintptr
@@ -641,6 +645,7 @@ func createPrestackControls() {
 	u.qcExport = prestackButton(IDPRESTACK_QC_EXPORT, "导出 QC 报告")
 	u.exportGather = prestackButton(IDPRESTACK_EXPORT_GATHER, "导出道集")
 	u.exportCSV = prestackButton(IDPRESTACK_EXPORT_CSV, "导出清单")
+	u.figureExport = prestackButton(IDPRESTACK_FIGURE_EXPORT, "生成绘图代码")
 	u.compareOpenB = prestackButton(IDPRESTACK_COMPARE_OPEN_B, "加载 B")
 	u.compareCloseB = prestackButton(IDPRESTACK_COMPARE_CLOSE_B, "关闭 B")
 	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出匹配报告")
@@ -1186,6 +1191,8 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		place(u.exportGather, x, y, 82, 24, true)
 		x += 88
 		place(u.exportCSV, x, y, 82, 24, true)
+		x += 88
+		place(u.figureExport, x, y, 110, 24, true)
 	} else {
 		// Keep keyed gathers on the same deliberate two-row grid.  The old
 		// wrapping loop counted hidden raw controls when calculating x, which
@@ -1272,6 +1279,8 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		place(u.exportGather, x, y, 82, 24, g)
 		x += 88
 		place(u.exportCSV, x, y, 82, 24, g)
+		x += 88
+		place(u.figureExport, x, y, 110, 24, g)
 	}
 	m := state.page == 1
 	for i, c := range u.layers {
@@ -1325,7 +1334,7 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		// the filters occupy the middle of the same row.
 		displayX := 100
 		if compareBReady {
-			displayX = 680
+			displayX = 580 // follow the filter group without a reserved empty gap
 		} else if state.compareBLoading {
 			displayX = 184
 		}
@@ -1340,6 +1349,7 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		place(u.compareRangeMin, displayX+362, 78, 48, 24, true)
 		place(u.compareRangeMax, displayX+414, 78, 48, 24, true)
 		place(u.compareRangeApply, displayX+466, 78, 64, 24, true)
+		place(u.figureExport, displayX+536, 78, 110, 27, true)
 	}
 }
 func prestackSceneRect() RECT {
@@ -1773,6 +1783,7 @@ func setPrestackProgress(done bool, label string) {
 }
 
 func cancelPrestackJobs() {
+	cancelPrestackFigureExport()
 	if prestackState.compareBCancel != nil {
 		prestackState.compareBCancel()
 		prestackState.compareBCancel = nil
@@ -2276,6 +2287,10 @@ func startPrestackCompareBTask(path string, requested *prestackcore.HeaderMappin
 		message(prestackHwnd, "叠前 A/B", "A 与 B 不能使用同一个 SEG-Y 文件。", MB_OK|MB_ICONINFORMATION)
 		return
 	}
+	// Replacing/re-mapping B is a dataset boundary for a frozen figure export.
+	// Cancel before bumping generations so neither a stale completion nor a
+	// stuck "cancel generation" button can survive the replacement.
+	cancelPrestackFigureExport()
 	if prestackState.compareBCancel != nil {
 		prestackState.compareBCancel()
 		prestackState.compareBCancel = nil
@@ -2355,6 +2370,7 @@ func startPrestackCompareBTask(path string, requested *prestackcore.HeaderMappin
 }
 
 func cancelPrestackCompareB() {
+	cancelPrestackFigureExport()
 	if prestackState.compareBCancel != nil {
 		prestackState.compareBCancel()
 		prestackState.compareBCancel = nil
@@ -2541,12 +2557,16 @@ func cancelPrestackExport() {
 }
 
 func prestackDisplayedTraces() ([]int64, []float64) {
-	g := prestackState.gather
+	return prestackDisplayedTracesForState(&prestackState)
+}
+
+func prestackDisplayedTracesForState(state *prestackSession) ([]int64, []float64) {
+	g := state.gather
 	if len(g.TraceIndices) == 0 {
 		return nil, nil
 	}
-	a := clampInt(prestackState.viewFirst, 0, len(g.TraceIndices)-1)
-	b := clampInt(prestackState.viewLast, a, len(g.TraceIndices)-1)
+	a := clampInt(state.viewFirst, 0, len(g.TraceIndices)-1)
+	b := clampInt(state.viewLast, a, len(g.TraceIndices)-1)
 	return g.TraceIndices[a : b+1], g.Positions[a : b+1]
 }
 
@@ -2556,16 +2576,20 @@ func prestackDisplayedTraces() ([]int64, []float64) {
 // is still used for export. Falling back to the logical gather keeps the
 // toolbar usable while the first frame is still loading.
 func prestackRenderedColumns() ([]int64, []float64) {
-	if len(prestackState.renderedTraces) > 0 {
-		n := len(prestackState.renderedTraces)
-		if len(prestackState.renderedPositions) < n {
-			n = len(prestackState.renderedPositions)
+	return prestackRenderedColumnsForState(&prestackState)
+}
+
+func prestackRenderedColumnsForState(state *prestackSession) ([]int64, []float64) {
+	if len(state.renderedTraces) > 0 {
+		n := len(state.renderedTraces)
+		if len(state.renderedPositions) < n {
+			n = len(state.renderedPositions)
 		}
 		if n > 0 {
-			return prestackState.renderedTraces[:n], prestackState.renderedPositions[:n]
+			return state.renderedTraces[:n], state.renderedPositions[:n]
 		}
 	}
-	return prestackDisplayedTraces()
+	return prestackDisplayedTracesForState(state)
 }
 
 // Offset display uses nearest actual traces on a physical offset axis. It
@@ -3187,13 +3211,24 @@ func prestackCompareSummaryRects(content RECT) [2]RECT {
 }
 
 func paintPrestackCompare(hdc uintptr) {
-	r := prestackLayoutRECT(prestackPanelLayoutForSize(int(clientWidth(prestackHwnd)), int(clientHeight(prestackHwnd)), 3).Content)
+	r := prestackLayoutRECT(prestackPanelLayoutForSize(clientWidth(prestackHwnd), clientHeight(prestackHwnd), 3).Content)
+	panels := prestackComparePanelRectsForContent(r, prestackCompareSummaryHeight)
+	paintPrestackCompareView(hdc, &prestackState, r, panels, prestackCompareSummaryLines(prestackState), prestackCompareDeltaEmptyMessage(prestackState))
+	saved, _, _ := pSaveDC.Call(hdc)
+	pIntersectClipRect.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom))
+	paintPrestackComparePickPreview(hdc, panels)
+	pRestoreDC.Call(hdc, saved)
+}
+
+// paintPrestackCompareView is the shared live/export compositor. All data,
+// labels and geometry are explicit; transient pointer previews stay in the
+// live wrapper and never become part of a reproducible figure.
+func paintPrestackCompareView(hdc uintptr, state *prestackSession, r RECT, panels [3]RECT, lines []string, deltaEmpty string) {
 	if r.Right <= r.Left || r.Bottom <= r.Top {
 		return
 	}
 	saved, _, _ := pSaveDC.Call(hdc)
 	pIntersectClipRect.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom))
-	lines := prestackCompareSummaryLines(prestackState)
 	for i, lineRect := range prestackCompareSummaryRects(r) {
 		if lineRect.Bottom <= lineRect.Top {
 			continue
@@ -3203,7 +3238,6 @@ func paintPrestackCompare(hdc uintptr) {
 	}
 	// Painting, workers and hit-testing reserve the same two rows at every
 	// width. Summary text cannot wrap into the panel or enlarge its top margin.
-	panels := prestackComparePanelRects()
 	if panels[0].Bottom <= panels[0].Top {
 		messageRect := r
 		messageRect.Top = int32(minInt(int(r.Bottom), int(r.Top)+prestackCompareSummaryHeight+6))
@@ -3225,19 +3259,19 @@ func paintPrestackCompare(hdc uintptr) {
 		var pixels []byte
 		switch i {
 		case 0:
-			pixels = prestackState.compareA
+			pixels = state.compareA
 		case 1:
-			pixels = prestackState.compareB
+			pixels = state.compareB
 		case 2:
-			pixels = prestackState.compareDelta
+			pixels = state.compareDelta
 		}
 		drawAxisText(hdc, label, int(rr.Left), int(rr.Top)+8, int(rr.Right), int(rr.Top)+30, DT_CENTER|DT_SINGLELINE)
 		imageRect := prestackCompareRasterRect(rr)
-		paintPrestackCompareRaster(hdc, imageRect, pixels, prestackState.compareWidth, prestackState.compareHeight)
+		paintPrestackCompareRaster(hdc, imageRect, pixels, state.compareWidth, state.compareHeight)
 		if i == 2 && len(pixels) == 0 {
 			// An intentionally disabled Delta is not a missing render. Put the
 			// reason in the panel itself as well as the compact summary above.
-			text := prestackCompareDeltaEmptyMessage(prestackState)
+			text := deltaEmpty
 			textRect := imageRect
 			textRect.Left += 12
 			textRect.Right -= 12
@@ -3248,7 +3282,6 @@ func paintPrestackCompare(hdc uintptr) {
 			}
 		}
 	}
-	paintPrestackComparePickPreview(hdc, panels)
 	pRestoreDC.Call(hdc, saved)
 }
 
@@ -3665,9 +3698,14 @@ func paintPrestackCompareRaster(hdc uintptr, r RECT, pixels []byte, width, heigh
 func clientWidth(hwnd uintptr) int  { r := clientRect(hwnd); return int(r.Right - r.Left) }
 func clientHeight(hwnd uintptr) int { r := clientRect(hwnd); return int(r.Bottom - r.Top) }
 func paintPrestackGather(hdc uintptr) {
-	r := prestackSceneRect()
-	if len(prestackState.indices) == 0 {
-		if prestackState.resizeActive || prestackState.resizePending {
+	paintPrestackGatherView(hdc, &prestackState, prestackSceneRect(), "")
+}
+
+// paintPrestackGatherView shares the exact Image/Wiggle/axis painter with
+// offscreen figure replay. It never reads the active window or session.
+func paintPrestackGatherView(hdc uintptr, state *prestackSession, r RECT, frozenTitle string) {
+	if len(state.indices) == 0 {
+		if state.resizeActive || state.resizePending {
 			// Keep the scene readable during a border drag.  There may not be a
 			// last frame yet (for example immediately after opening a gather), so
 			// use the same neutral grey used by the 2-D viewer instead of clearing
@@ -3683,31 +3721,31 @@ func paintPrestackGather(hdc uintptr) {
 			return
 		}
 		text := "请选择 SEG-Y 并确认道头映射。索引就绪后选择 CMP、Shot、Receiver 或 Common Offset 道集。"
-		if prestackState.rendering {
+		if state.rendering {
 			text = "正在刷新当前道集…"
 		}
 		drawAxisText(hdc, text, int(r.Left), int(r.Top), int(r.Right), int(r.Bottom), DT_LEFT|DT_WORDBREAK)
 		return
 	}
-	w, h := prestackState.imageWidth, prestackState.imageHeight
+	w, h := state.imageWidth, state.imageHeight
 	// A stale/partial result must never be passed to StretchDIBits or indexed
 	// with a mismatched stride. This can happen briefly while switching from
 	// Geometry to Gather or while a cancelled render is being delivered.
-	if w <= 0 || h <= 0 || len(prestackState.indices) != w*h ||
-		(prestackState.display == 0 && len(prestackState.bgra) != w*h*4) {
+	if w <= 0 || h <= 0 || len(state.indices) != w*h ||
+		(state.display == 0 && len(state.bgra) != w*h*4) {
 		drawAxisText(hdc, "正在准备当前道集…", int(r.Left), int(r.Top), int(r.Right), int(r.Bottom), DT_LEFT|DT_SINGLELINE)
 		return
 	}
 	saved, _, _ := pSaveDC.Call(hdc)
 	pIntersectClipRect.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom))
-	if prestackState.display == 0 {
+	if state.display == 0 {
 		bmi := BITMAPINFO{Header: BITMAPINFOHEADER{Size: uint32(unsafe.Sizeof(BITMAPINFOHEADER{})), Width: int32(w), Height: -int32(h), Planes: 1, BitCount: 32, Compression: BI_RGB}}
 		// Match the ordinary 2-D viewer's resize path.  The default
 		// COLORONCOLOR mode can leave a dark one-pixel seam when the last
 		// complete frame is stretched into a series of intermediate scene
 		// rectangles during WM_SIZE.
 		pSetStretchBltMode.Call(hdc, HALFTONE)
-		pStretchDIBits.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0, 0, uintptr(w), uintptr(h), uintptr(unsafe.Pointer(&prestackState.bgra[0])), uintptr(unsafe.Pointer(&bmi)), DIB_RGB_COLORS, SRCCOPY)
+		pStretchDIBits.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0, 0, uintptr(w), uintptr(h), uintptr(unsafe.Pointer(&state.bgra[0])), uintptr(unsafe.Pointer(&bmi)), DIB_RGB_COLORS, SRCCOPY)
 	} else {
 		// Fill each lobe back to the zero-amplitude baseline.  RenderTraceIndices
 		// maps the display maximum to 0 and the display minimum to 255, so the
@@ -3743,8 +3781,8 @@ func paintPrestackGather(hdc uintptr) {
 			positivePoints = append(positivePoints, baseline(0))
 			negativePoints = append(negativePoints, baseline(0))
 			for y := 0; y < h; y++ {
-				point := wavePoint(cx, scale, y, prestackState.indices[y*w+x])
-				if prestackState.indices[y*w+x] < 128 {
+				point := wavePoint(cx, scale, y, state.indices[y*w+x])
+				if state.indices[y*w+x] < 128 {
 					positivePoints = append(positivePoints, point)
 					negativePoints = append(negativePoints, baseline(y))
 				} else {
@@ -3765,7 +3803,7 @@ func paintPrestackGather(hdc uintptr) {
 			// positive portions in red so the lobe boundaries remain crisp.
 			pSelectObject.Call(hdc, blackPen)
 			for y := 0; y < h; y++ {
-				point := wavePoint(cx, scale, y, prestackState.indices[y*w+x])
+				point := wavePoint(cx, scale, y, state.indices[y*w+x])
 				if y == 0 {
 					pMoveToEx.Call(hdc, uintptr(point.X), uintptr(point.Y), 0)
 				} else {
@@ -3777,7 +3815,7 @@ func paintPrestackGather(hdc uintptr) {
 			pSelectObject.Call(hdc, redPen)
 			positive := false
 			for y := 0; y < h; y++ {
-				idx := prestackState.indices[y*w+x]
+				idx := state.indices[y*w+x]
 				point := wavePoint(cx, scale, y, idx)
 				if idx < 128 {
 					if !positive {
@@ -3799,24 +3837,24 @@ func paintPrestackGather(hdc uintptr) {
 		pDeleteObject.Call(redBrush)
 		pDeleteObject.Call(blackBrush)
 	}
-	if prestackState.dragging && !prestackState.panning {
-		drawCrookedZoomRectangle(hdc, prestackState.dragX, prestackState.dragY, prestackState.dragCurrentX, prestackState.dragCurrentY)
+	if state.dragging && !state.panning {
+		drawCrookedZoomRectangle(hdc, state.dragX, state.dragY, state.dragCurrentX, state.dragCurrentY)
 	}
 	pRestoreDC.Call(hdc, saved)
 	for j := 0; j <= 4; j++ {
-		sample := prestackState.sampleFirst + int(float64(j)*float64(prestackState.sampleLast-prestackState.sampleFirst)/4)
-		ms := float64(sample*prestackState.dataset.Metadata.SampleIntervalUS) / 1000
+		sample := state.sampleFirst + int(float64(j)*float64(state.sampleLast-state.sampleFirst)/4)
+		ms := float64(sample*state.dataset.Metadata.SampleIntervalUS) / 1000
 		y := int(r.Top) + j*int(r.Bottom-r.Top)/4
 		drawAxisText(hdc, fmt.Sprintf("%.0f ms", ms), 0, y-8, int(r.Left)-5, y+16, DT_RIGHT|DT_SINGLELINE)
 	}
-	_, positions := prestackRenderedColumns()
+	_, positions := prestackRenderedColumnsForState(state)
 	if len(positions) > 0 {
 		axisName := "Trace"
-		if prestackState.selection.Axis == prestackcore.AxisOffset {
+		if state.selection.Axis == prestackcore.AxisOffset {
 			axisName = "Offset"
 		}
 		firstLabel, middleLabel, lastLabel := "", "", ""
-		if prestackState.selection.Axis == prestackcore.AxisOffset {
+		if state.selection.Axis == prestackcore.AxisOffset {
 			labelAt := func(i int) string { return fmt.Sprintf("%.6g", positions[i]) }
 			firstLabel = fmt.Sprintf("%s %s", axisName, labelAt(0))
 			lastLabel = labelAt(len(positions) - 1)
@@ -3827,9 +3865,9 @@ func paintPrestackGather(hdc uintptr) {
 			// The raster may contain fewer columns than the current logical
 			// view because it is sampled to the window width.  Axis labels must
 			// describe the page's trace range, not those implementation columns.
-			logicalCount := len(prestackState.gather.TraceIndices)
-			if prestackState.viewLast >= prestackState.viewFirst && logicalCount > 0 {
-				logicalCount = prestackState.viewLast - prestackState.viewFirst + 1
+			logicalCount := len(state.gather.TraceIndices)
+			if state.viewLast >= state.viewFirst && logicalCount > 0 {
+				logicalCount = state.viewLast - state.viewFirst + 1
 			}
 			logicalCount = maxInt(1, logicalCount)
 			firstLabel = fmt.Sprintf("显示道 1")
@@ -3844,34 +3882,42 @@ func paintPrestackGather(hdc uintptr) {
 		}
 		drawAxisText(hdc, lastLabel, int(r.Right)-180, int(r.Bottom)+5, int(r.Right), int(r.Bottom)+28, DT_RIGHT|DT_SINGLELINE)
 	}
+	title := frozenTitle
+	if title == "" {
+		title = prestackGatherFigureTitle(state, positions)
+	}
+	drawAxisText(hdc, title, int(r.Left), int(r.Top)-25, int(r.Right), int(r.Top)-2, DT_CENTER|DT_SINGLELINE)
+}
+
+func prestackGatherFigureTitle(state *prestackSession, positions []float64) string {
 	// Keep the offset range visible even when Trace is the horizontal axis.  It
 	// is easy to lose this important acquisition context when switching between
 	// CMP/Shot/Receiver gathers, so show the same range in the title and in the
 	// completion status rather than requiring the user to infer it from the
 	// Offset axis mode.
 	offsetText := "Offset n/a"
-	if prestackState.gather.OffsetRange.Valid {
-		offsetText = fmt.Sprintf("Offset %.6g..%.6g", prestackState.gather.OffsetRange.Min, prestackState.gather.OffsetRange.Max)
+	if state.gather.OffsetRange.Valid {
+		offsetText = fmt.Sprintf("Offset %.6g..%.6g", state.gather.OffsetRange.Min, state.gather.OffsetRange.Max)
 	}
-	titleKey := prestackState.selection.Key.String()
-	physicalCount := len(prestackState.gather.TraceIndices)
-	displayColumns := prestackState.imageWidth
+	titleKey := state.selection.Key.String()
+	physicalCount := len(state.gather.TraceIndices)
+	displayColumns := state.imageWidth
 	if displayColumns <= 0 {
 		displayColumns = len(positions)
 	}
-	if prestackState.selection.Key.All {
-		kindLabel := prestackGatherKindLabel(prestackState.selection.Type)
-		if len(prestackState.selection.Keys) > 0 {
-			titleKey = fmt.Sprintf("%s 多道集 %d 组（一级 %s 分组，二级 %s）", kindLabel, len(prestackState.selection.Keys), kindLabel, prestackSecondaryLabel(prestackState.selection))
+	if state.selection.Key.All {
+		kindLabel := prestackGatherKindLabel(state.selection.Type)
+		if len(state.selection.Keys) > 0 {
+			titleKey = fmt.Sprintf("%s 多道集 %d 组（一级 %s 分组，二级 %s）", kindLabel, len(state.selection.Keys), kindLabel, prestackSecondaryLabel(state.selection))
 		} else {
-			titleKey = fmt.Sprintf("%s 全部范围（全文件聚合，一级 %s 分组，二级 %s）", kindLabel, kindLabel, prestackSecondaryLabel(prestackState.selection))
+			titleKey = fmt.Sprintf("%s 全部范围（全文件聚合，一级 %s 分组，二级 %s）", kindLabel, kindLabel, prestackSecondaryLabel(state.selection))
 		}
 	}
-	title := fmt.Sprintf("%s — %s — 物理道 %d | 显示列 %d — %s", filepath.Base(prestackState.dataset.Path), titleKey, physicalCount, displayColumns, offsetText)
-	if prestackState.selection.Type == prestackcore.GatherRaw {
-		title = fmt.Sprintf("%s — 原始叠前道序 %d–%d — 物理道 %d | 显示列 %d — %s", filepath.Base(prestackState.dataset.Path), prestackState.gather.RawTraceStart+1, prestackState.gather.RawTraceEnd, physicalCount, displayColumns, offsetText)
+	title := fmt.Sprintf("%s — %s — 物理道 %d | 显示列 %d — %s", filepath.Base(state.dataset.Path), titleKey, physicalCount, displayColumns, offsetText)
+	if state.selection.Type == prestackcore.GatherRaw {
+		title = fmt.Sprintf("%s — 原始叠前道序 %d–%d — 物理道 %d | 显示列 %d — %s", filepath.Base(state.dataset.Path), state.gather.RawTraceStart+1, state.gather.RawTraceEnd, physicalCount, displayColumns, offsetText)
 	}
-	drawAxisText(hdc, title, int(r.Left), int(r.Top)-25, int(r.Right), int(r.Top)-2, DT_CENTER|DT_SINGLELINE)
+	return title
 }
 func prestackMapPixel(x, y float64) (int, int) {
 	r := prestackSceneRect()
@@ -4327,6 +4373,12 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_PRESTACK_EXPORT_DONE:
 		receivePrestackExport()
 		return 0
+	case WM_PRESTACK_FIGURE_DONE:
+		receivePrestackFigureExport()
+		return 0
+	case WM_PRESTACK_FIGURE_PROGRESS:
+		receivePrestackFigureProgress()
+		return 0
 	case WM_PRESTACK_EXPORT_PROGRESS:
 		if int64(wParam) == prestackState.exportGeneration && prestackState.dataset != nil {
 			pct := int(lParam)
@@ -4394,6 +4446,10 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			applyPrestackMapping()
 		case IDPRESTACK_QC_EXPORT:
 			exportPrestackQC()
+		case IDPRESTACK_FIGURE_EXPORT:
+			if code == 0 || code == 1 {
+				exportPrestackFigure()
+			}
 		case IDPRESTACK_COMPARE_OPEN_B:
 			if code == 0 || code == 1 {
 				if path := openDialog(h); path != "" {

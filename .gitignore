@@ -19,6 +19,8 @@ dist/
 exports/
 output/
 artifacts/
+# User-generated figure bundles contain local data paths and reference images.
+*.[fF][iI][gG][uU][rR][eE]/
 
 # Seismic, navigation, and generated cache data
 *.[sS][gG][yY]
