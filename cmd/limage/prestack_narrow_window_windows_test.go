@@ -73,7 +73,7 @@ func prestackNarrowFixedControls(u *prestackControls) map[uintptr]bool {
 
 func TestPrestackNarrowViewportAndEveryScrollRequest(t *testing.T) {
 	for _, width := range prestackNarrowWidths {
-		for page, requiredWidth := range []int{1100, 670, 610, 1250, 160} {
+		for page, requiredWidth := range []int{1330, 670, 610, 1400, 160} {
 			t.Run(fmt.Sprintf("%d/page%d", width, page), func(t *testing.T) {
 				viewport := prestackToolbarViewportForSize(width, page)
 				wantCanvas := maxLayoutInt(width, requiredWidth)
@@ -142,7 +142,7 @@ func TestPrestackNarrowActualControlsRemainReachableAtScrollEnds(t *testing.T) {
 					state.progressDone = done
 					state.sampleFirst, state.sampleLast = 0, 255
 					state.renderGeneration, state.selectionGeneration, state.resizeGeneration = 23, 24, 25
-					viewport := prestackToolbarViewportForSize(width, state.page)
+					viewport := prestackToolbarViewportForState(width, state.page, &state)
 					baseline := prestackNarrowPlacements(viewport.CanvasWidth, 480, u, &state)
 					left := prestackNarrowPlacements(width, 480, u, &state)
 					state.toolbarScrollOffset = viewport.MaxScroll
@@ -167,11 +167,14 @@ func TestPrestackNarrowActualControlsRemainReachableAtScrollEnds(t *testing.T) {
 						if expected.rect.Left < 0 || expected.rect.Right > viewport.CanvasWidth || expected.rect.width() <= 0 || expected.rect.height() <= 0 {
 							t.Fatalf("%s escapes virtual canvas %d: %+v", names[handle], viewport.CanvasWidth, expected.rect)
 						}
-						canReach := func(p prestackNarrowPlacement) bool {
-							return p.visible && p.rect.Left >= 0 && p.rect.Right <= width
-						}
-						if !canReach(left[handle]) && !canReach(right[handle]) {
-							t.Fatalf("%s cannot be fully reached at either scroll end: left=%+v right=%+v", names[handle], left[handle], right[handle])
+						// Scrolling is continuous; an endpoint is not guaranteed to
+						// align with every control when the row has two variants (for
+						// example before/after loading B). Verify that some legal
+						// scroll position can expose the complete control.
+						minScroll := maxLayoutInt(0, expected.rect.Right-width)
+						maxScroll := minLayoutInt(viewport.MaxScroll, expected.rect.Left)
+						if minScroll > maxScroll {
+							t.Fatalf("%s cannot be fully reached in viewport: rect=%+v width=%d maxScroll=%d", names[handle], expected.rect, width, viewport.MaxScroll)
 						}
 						for _, endpoint := range []struct {
 							position int

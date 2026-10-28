@@ -31,7 +31,11 @@ func TestPrestackPanelLayoutKeepsContentInsideFooter(t *testing.T) {
 func TestPrestackPanelLayoutGatherHasStableTwoRows(t *testing.T) {
 	wide := prestackPanelLayoutForSize(1360, 880, 0)
 	narrow := prestackPanelLayoutForSize(1120, 700, 0)
-	if wide.Scene.Top != narrow.Scene.Top || wide.ToolbarTop != narrow.ToolbarTop || wide.ToolbarBottom != narrow.ToolbarBottom {
+	wideExtra := prestackToolbarViewportForSize(1360, 0).ExtraTop
+	narrowExtra := prestackToolbarViewportForSize(1120, 0).ExtraTop
+	if wide.Scene.Top-wideExtra != narrow.Scene.Top-narrowExtra ||
+		wide.ToolbarTop-wideExtra != narrow.ToolbarTop-narrowExtra ||
+		wide.ToolbarBottom-wideExtra != narrow.ToolbarBottom-narrowExtra {
 		t.Fatalf("gather rows changed with width: wide=%+v narrow=%+v", wide, narrow)
 	}
 }

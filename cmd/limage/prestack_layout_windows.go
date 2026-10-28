@@ -35,8 +35,17 @@ type prestackToolbarViewport struct {
 }
 
 func prestackToolbarViewportForSize(width, page int) prestackToolbarViewport {
+	return prestackToolbarViewportForState(width, page, nil)
+}
+
+// prestackToolbarViewportForState computes the virtual toolbar width for the
+// currently visible controls. Compare has two legitimate widths: the compact
+// pre-B row and the wider row that includes the B filters. Keeping this state
+// in the viewport contract prevents a narrow window from scrolling past the
+// only position where a control can be fully reached.
+func prestackToolbarViewportForState(width, page int, state *prestackSession) prestackToolbarViewport {
 	width = maxLayoutInt(1, width)
-	controlWidth := 1100 // compact Gather and Raw toolbars, including bin controls
+	controlWidth := 1330 // compact Gather/Raw toolbars, including session controls
 	switch page {
 	case 1:
 		controlWidth = 670
@@ -47,7 +56,12 @@ func prestackToolbarViewportForSize(width, page int) prestackToolbarViewport {
 		// The virtual canvas is wider than a narrow client so the native scrollbar
 		// can expose the complete row without shrinking the controls to unreadable
 		// sizes.
-		controlWidth = 1250
+		controlWidth = 1400
+		if state != nil && state.compareBDataset == nil && !state.compareBLoading {
+			// Before B is loaded the filters and close/export controls are hidden;
+			// the palette/range/session controls end at roughly 914px.
+			controlWidth = 914
+		}
 	case 4:
 		controlWidth = 160
 	}
@@ -61,7 +75,11 @@ func prestackToolbarViewportForSize(width, page int) prestackToolbarViewport {
 }
 
 func prestackToolbarScrollPosition(width, page, position, request, trackPosition int) int {
-	v := prestackToolbarViewportForSize(width, page)
+	return prestackToolbarScrollPositionForState(width, page, nil, position, request, trackPosition)
+}
+
+func prestackToolbarScrollPositionForState(width, page int, state *prestackSession, position, request, trackPosition int) int {
+	v := prestackToolbarViewportForState(width, page, state)
 	switch request {
 	case 0: // SB_LINELEFT
 		position -= 32

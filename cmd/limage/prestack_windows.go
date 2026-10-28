@@ -81,6 +81,8 @@ const (
 	IDPRESTACK_COMPARE_RANGE_APPLY
 	IDPRESTACK_TOOLBAR_SCROLL
 	IDPRESTACK_FIGURE_EXPORT
+	IDPRESTACK_SESSION_SAVE
+	IDPRESTACK_SESSION_OPEN
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -129,6 +131,7 @@ type prestackControls struct {
 	toolbarScroll                                                                                 uintptr
 	qcExport, exportGather, exportCSV                                                             uintptr
 	figureExport                                                                                  uintptr
+	sessionSave, sessionOpen                                                                      uintptr
 	compareOpenB, compareCloseB, compareExport                                                    uintptr
 	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly            uintptr
 	compareFilterAmbiguous, compareFilterInvalid                                                  uintptr
@@ -646,6 +649,8 @@ func createPrestackControls() {
 	u.exportGather = prestackButton(IDPRESTACK_EXPORT_GATHER, "导出道集")
 	u.exportCSV = prestackButton(IDPRESTACK_EXPORT_CSV, "导出清单")
 	u.figureExport = prestackButton(IDPRESTACK_FIGURE_EXPORT, "生成绘图代码")
+	u.sessionSave = prestackButton(IDPRESTACK_SESSION_SAVE, "保存流程")
+	u.sessionOpen = prestackButton(IDPRESTACK_SESSION_OPEN, "打开流程")
 	u.compareOpenB = prestackButton(IDPRESTACK_COMPARE_OPEN_B, "加载 B")
 	u.compareCloseB = prestackButton(IDPRESTACK_COMPARE_CLOSE_B, "关闭 B")
 	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出匹配报告")
@@ -1045,8 +1050,8 @@ func layoutPrestackControls() {
 			}
 		}
 	}
-	viewport := prestackToolbarViewportForSize(w, prestackState.page)
-	prestackState.toolbarScrollOffset = prestackToolbarScrollPosition(w, prestackState.page, prestackState.toolbarScrollOffset, 8, 0)
+	viewport := prestackToolbarViewportForState(w, prestackState.page, &prestackState)
+	prestackState.toolbarScrollOffset = prestackToolbarScrollPositionForState(w, prestackState.page, &prestackState, prestackState.toolbarScrollOffset, 8, 0)
 	info := prestackScrollInfo{Size: uint32(unsafe.Sizeof(prestackScrollInfo{})), Mask: 0x01 | 0x02 | 0x04,
 		Max: int32(viewport.CanvasWidth - 1), Page: uint32(maxInt(1, w)), Pos: int32(prestackState.toolbarScrollOffset)}
 	prestackSetScrollInfo.Call(u.toolbarScroll, 2 /* SB_CTL */, uintptr(unsafe.Pointer(&info)), 1)
@@ -1064,7 +1069,7 @@ func layoutPrestackControls() {
 	if u.mappingAuto != 0 {
 		pEnableWindow.Call(u.mappingAuto, map[bool]uintptr{true: 1, false: 0}[!prestackState.mappingTargetB || (prestackState.compareBDataset != nil && !prestackState.compareBLoading)])
 	}
-	prestackControlsLayoutForSize(w, h, u, &prestackState, place)
+	prestackControlsLayoutForViewport(w, h, viewport.CanvasWidth, u, &prestackState, place)
 	if prestackState.page == 3 {
 		loaded := prestackState.compareBDataset != nil && prestackState.compareBIndex != nil && !prestackState.compareBLoading
 		if u.compareCloseB != 0 {
@@ -1082,6 +1087,15 @@ func layoutPrestackControls() {
 // not a second approximation of toolbar bounds. The callback clips controls
 // to the real client; only page controls translate in the virtual viewport.
 func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestackSession, place func(uintptr, int, int, int, int, bool)) {
+	prestackControlsLayoutForViewport(w, h, prestackToolbarViewportForSize(w, state.page).CanvasWidth, u, state, place)
+}
+
+// prestackControlsLayoutForViewport lays out controls in a virtual toolbar
+// canvas while retaining the actual client width for clipping and compact
+// sizing. This distinction is important for narrow-window tests and for the
+// scrollbar: the virtual canvas must not make the controls switch to the wide
+// layout just because they are being measured at their scrollable width.
+func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackControls, state *prestackSession, place func(uintptr, int, int, int, int, bool)) {
 	// Page branches may override shared controls, but the native callback must
 	// receive each HWND exactly once. Preserve first-seen ordering while keeping
 	// only the final bounds/visibility; no HWND API belongs in this pure function.
@@ -1112,24 +1126,27 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 	}()
 	place(u.home, 10, 8, 54, 25, true)
 	place(u.open, 70, 8, 98, 25, true)
-	place(u.path, 180, 12, w-190, 21, true)
-	place(u.tabs, 10, 41, w-20, 28, true)
-	place(u.status, 10, h-27, w-195, 23, true)
-	place(u.progress, w-177, h-23, 165, 16, !state.progressDone)
-	place(u.progressLabel, w-177, h-23, 165, 18, state.progressDone)
-	viewport := prestackToolbarViewportForSize(w, state.page)
+	place(u.path, 180, 12, clientW-190, 21, true)
+	place(u.tabs, 10, 41, clientW-20, 28, true)
+	place(u.status, 10, h-27, clientW-195, 23, true)
+	place(u.progress, clientW-177, h-23, 165, 16, !state.progressDone)
+	place(u.progressLabel, clientW-177, h-23, 165, 18, state.progressDone)
+	viewport := prestackToolbarViewportForState(clientW, state.page, state)
 	scrollRect := viewport.ScrollRect
 	place(u.toolbarScroll, scrollRect.Left, scrollRect.Top, maxInt(1, scrollRect.width()), maxInt(1, scrollRect.height()), viewport.MaxScroll > 0)
-	clientW := w
-	offset := prestackToolbarScrollPosition(w, state.page, state.toolbarScrollOffset, 8, 0)
+	offset := prestackToolbarScrollPositionForState(clientW, state.page, state, state.toolbarScrollOffset, 8, 0)
 	fixedPlace := place
 	place = func(c uintptr, x, y, ww, hh int, visible bool) {
 		x -= offset
 		fixedPlace(c, x, y+viewport.ExtraTop, ww, hh, visible && x < clientW && x+ww > 0)
 	}
-	w = viewport.CanvasWidth
+	w := canvasW
 	g := state.page == 0
 	isRaw := g && state.selection.Type == prestackcore.GatherRaw
+	// Session controls are available only on Gather/Compare.  Hide them first
+	// so switching pages cannot leave a stale button over QC or Geometry.
+	place(u.sessionSave, 0, 0, 1, 1, false)
+	place(u.sessionOpen, 0, 0, 1, 1, false)
 	x, y := 10, 76
 	// Raw file-order mode uses the same two-row toolbar as the other gather
 	// modes.  Keep the range controls on row one and the common display
@@ -1193,6 +1210,10 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		place(u.exportCSV, x, y, 82, 24, true)
 		x += 88
 		place(u.figureExport, x, y, 110, 24, true)
+		x += 118
+		place(u.sessionSave, x, y, 78, 24, true)
+		x += 84
+		place(u.sessionOpen, x, y, 78, 24, true)
 	} else {
 		// Keep keyed gathers on the same deliberate two-row grid.  The old
 		// wrapping loop counted hidden raw controls when calculating x, which
@@ -1207,6 +1228,9 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		// inside the client.  Use a compact two-row variant instead of allowing
 		// the last controls to spill into the non-client area (which also caused
 		// stale pixels to appear after a resize).
+		// Use the virtual canvas width for the compact decision so the layout is
+		// invariant while the toolbar is scrolled. The viewport contract keeps
+		// the whole row reachable at narrow client widths.
 		compact := w < 1320
 		kindW, prevW, keyW, nextW := 150, 64, 190, 64
 		sortLabelW, sortW, axisW := 42, 124, 110
@@ -1281,6 +1305,10 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		place(u.exportCSV, x, y, 82, 24, g)
 		x += 88
 		place(u.figureExport, x, y, 110, 24, g)
+		x += 118
+		place(u.sessionSave, x, y, 78, 24, g)
+		x += 84
+		place(u.sessionOpen, x, y, 78, 24, g)
 	}
 	m := state.page == 1
 	for i, c := range u.layers {
@@ -1350,6 +1378,8 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 		place(u.compareRangeMax, displayX+414, 78, 48, 24, true)
 		place(u.compareRangeApply, displayX+466, 78, 64, 24, true)
 		place(u.figureExport, displayX+536, 78, 110, 27, true)
+		place(u.sessionSave, displayX+652, 78, 78, 27, true)
+		place(u.sessionOpen, displayX+736, 78, 78, 27, true)
 	}
 }
 func prestackSceneRect() RECT {
@@ -1927,6 +1957,33 @@ func receivePrestackIndex(gen int64) {
 	prestackState.index = r.index
 	prestackState.indexCacheStats = r.cacheStats
 	prestackState.mapBounds = r.index.Bounds
+	if prestackPendingSession != nil {
+		snapshot := prestackPendingSession.Clone()
+		// The first scan may have used the automatic/current mapping.  Restart
+		// once with the snapshot mapping before publishing any restored gather.
+		if prestackState.mapping != snapshot.AMapping {
+			prestackState.mapping = snapshot.AMapping
+			prestackState.mappingGeneration = atomic.AddInt64(&prestackGeneration, 1)
+			startPrestackIndex(false)
+			return
+		}
+		prestackPendingSession = nil
+		restorePrestackSessionAfterIndex(snapshot)
+		if snapshot.Compare.Enabled && snapshot.Compare.BSource != nil {
+			if path := resolvePrestackSessionSource(*snapshot.Compare.BSource, "恢复 B", true); path != "" {
+				prestackPendingSessionCompare = &snapshot
+				var mapping *prestackcore.HeaderMapping
+				if snapshot.Compare.BMapping != nil {
+					m := *snapshot.Compare.BMapping
+					mapping = &m
+				}
+				startPrestackCompareBWithMapping(path, mapping)
+			} else {
+				setPrestackStatus("A 已恢复；B 文件未通过快速校验，未加载 B")
+			}
+		}
+		return
+	}
 	setText(prestackUI.mappingText, prestackMappingSummary(prestackState))
 	pSendMessageW.Call(prestackUI.progress, PBM_SETPOS, 100, 0)
 	setPrestackProgress(false, "读取道集")
@@ -2371,6 +2428,7 @@ func startPrestackCompareBTask(path string, requested *prestackcore.HeaderMappin
 
 func cancelPrestackCompareB() {
 	cancelPrestackFigureExport()
+	prestackPendingSessionCompare = nil
 	if prestackState.compareBCancel != nil {
 		prestackState.compareBCancel()
 		prestackState.compareBCancel = nil
@@ -2447,6 +2505,7 @@ func receivePrestackCompareB(gen int64) {
 		}
 	}
 	if r.err != nil || r.dataset == nil || r.index == nil {
+		prestackPendingSessionCompare = nil
 		prestackState.compareBError = "B 索引失败：" + errorText(r.err, "未知错误")
 		setPrestackStatus(prestackState.compareBError + "；A 仍可继续浏览")
 		if prestackState.page == 3 {
@@ -2485,7 +2544,9 @@ func receivePrestackCompareB(gen int64) {
 	if len(prestackState.compareBMatch.Pairs) == 0 && prestackState.compareBAxis.Reason == "" {
 		prestackState.compareBAxis.Reason = "当前道集无匹配道"
 	}
-	if prestackState.page == 3 {
+	if prestackPendingSessionCompare != nil {
+		applyPendingPrestackSessionCompare()
+	} else if prestackState.page == 3 {
 		startPrestackCompareRender()
 	}
 	setPrestackStatus(fmt.Sprintf("B %s：%s | 匹配 %d 对；A 顺序保持不变", prestackIndexCacheSummary(r.cacheStats), filepath.Base(r.dataset.Path), len(prestackState.compareBMatch.Pairs)))
@@ -4236,8 +4297,8 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		if lParam != 0 && lParam == prestackUI.toolbarScroll {
 			info := prestackScrollInfo{Size: uint32(unsafe.Sizeof(prestackScrollInfo{})), Mask: 0x10 /* SIF_TRACKPOS */}
 			prestackGetScrollInfo.Call(prestackUI.toolbarScroll, 2 /* SB_CTL */, uintptr(unsafe.Pointer(&info)))
-			prestackState.toolbarScrollOffset = prestackToolbarScrollPosition(clientWidth(h), prestackState.page,
-				prestackState.toolbarScrollOffset, int(wParam&0xffff), int(info.Track))
+			prestackState.toolbarScrollOffset = prestackToolbarScrollPositionForState(clientWidth(h), prestackState.page,
+				&prestackState, prestackState.toolbarScrollOffset, int(wParam&0xffff), int(info.Track))
 			layoutPrestackControls()
 			redrawPrestackWholeClient()
 			return 0
@@ -4449,6 +4510,14 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		case IDPRESTACK_FIGURE_EXPORT:
 			if code == 0 || code == 1 {
 				exportPrestackFigure()
+			}
+		case IDPRESTACK_SESSION_SAVE:
+			if code == 0 || code == 1 {
+				savePrestackSessionSnapshot()
+			}
+		case IDPRESTACK_SESSION_OPEN:
+			if code == 0 || code == 1 {
+				openPrestackSessionSnapshot()
 			}
 		case IDPRESTACK_COMPARE_OPEN_B:
 			if code == 0 || code == 1 {

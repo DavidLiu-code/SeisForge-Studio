@@ -7,6 +7,7 @@
 - [中文用户指南](USER_GUIDE.zh-CN.md)：从打开数据到二维、三维、弯线和 SEG-Y 分析的完整流程。
 - [快捷键与鼠标操作](SHORTCUTS.md)：二维、弯线、真三维和伪三维交互速查。
 - [生成叠前绘图代码](PRESTACK_FIGURE_REPLAY.md)：Gather / Compare 配方、一键复绘和像素一致性校验。
+- [叠前流程快照](PRESTACK_SESSION_SNAPSHOT.md)：保存和恢复 Gather、Compare、QC、Geometry、Mapping 状态。
 - [兼容性说明](COMPATIBILITY.md)：旧 Limage 设置、缓存、Recent 和许可证的保留策略。
 - [1.10.0 发布说明](releases/v1.10.0.md)：叠前独立工作区、道头索引、道集与 Geometry 使用说明。
 - [1.10.2 发布说明](releases/v1.10.2.md)：原始叠前道序、范围读取和窗口调整稳定性。
