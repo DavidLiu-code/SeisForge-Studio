@@ -56,6 +56,10 @@ const (
 	IDPRESTACK_HEADERS
 	IDPRESTACK_MAPPING_AUTO
 	IDPRESTACK_MAPPING_APPLY
+	IDPRESTACK_MAPPING_PROFILE_NAME
+	IDPRESTACK_MAPPING_PROFILE
+	IDPRESTACK_MAPPING_PROFILE_SAVE
+	IDPRESTACK_MAPPING_PROFILE_APPLY
 	IDPRESTACK_LAYER_SOURCE
 	IDPRESTACK_LAYER_RECEIVER
 	IDPRESTACK_LAYER_MIDPOINT
@@ -127,26 +131,27 @@ const (
 )
 
 type prestackControls struct {
-	home, open, path, tabs, status, progress, progressLabel                                       uintptr
-	toolbarScroll                                                                                 uintptr
-	qcExport, exportGather, exportCSV                                                             uintptr
-	figureExport                                                                                  uintptr
-	sessionSave, sessionOpen                                                                      uintptr
-	compareOpenB, compareCloseB, compareExport                                                    uintptr
-	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly            uintptr
-	compareFilterAmbiguous, compareFilterInvalid                                                  uintptr
-	compareRangeLabel, compareRangeLimit, compareRangeMin, compareRangeMax, compareRangeApply     uintptr
-	kind, key, prev, next, sortLabel, sort, axis, display, wiggleDecimLabel, wiggleDecim, palette uintptr
-	offsetBinLabel, offsetBin, offsetBinApply                                                     uintptr
-	cmpBinLabel, cmpBin, cmpBinApply                                                              uintptr
-	multiLabel, multiEdit, multiApply                                                             uintptr
-	rawTraceStartLabel, rawTraceStart, rawTraceEndLabel, rawTraceEnd                              uintptr
-	rawSampleMode, rawSampleStartLabel, rawSampleStart, rawSampleEndLabel, rawSampleEnd           uintptr
-	rawApply, rawAll                                                                              uintptr
-	gainMinus, gain, gainPlus, agc, reset, headers                                                uintptr
-	layers                                                                                        [5]uintptr
-	mapReset, mappingAuto, mappingApply, mappingText                                              uintptr
-	mappingLabels, mappingEdits                                                                   []uintptr
+	home, open, path, tabs, status, progress, progressLabel                                          uintptr
+	toolbarScroll                                                                                    uintptr
+	qcExport, exportGather, exportCSV                                                                uintptr
+	figureExport                                                                                     uintptr
+	sessionSave, sessionOpen                                                                         uintptr
+	compareOpenB, compareCloseB, compareExport                                                       uintptr
+	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly               uintptr
+	compareFilterAmbiguous, compareFilterInvalid                                                     uintptr
+	compareRangeLabel, compareRangeLimit, compareRangeMin, compareRangeMax, compareRangeApply        uintptr
+	kind, key, prev, next, sortLabel, sort, axis, display, wiggleDecimLabel, wiggleDecim, palette    uintptr
+	offsetBinLabel, offsetBin, offsetBinApply                                                        uintptr
+	cmpBinLabel, cmpBin, cmpBinApply                                                                 uintptr
+	multiLabel, multiEdit, multiApply                                                                uintptr
+	rawTraceStartLabel, rawTraceStart, rawTraceEndLabel, rawTraceEnd                                 uintptr
+	rawSampleMode, rawSampleStartLabel, rawSampleStart, rawSampleEndLabel, rawSampleEnd              uintptr
+	rawApply, rawAll                                                                                 uintptr
+	gainMinus, gain, gainPlus, agc, reset, headers                                                   uintptr
+	layers                                                                                           [5]uintptr
+	mapReset, mappingAuto, mappingApply, mappingText                                                 uintptr
+	mappingProfileLabel, mappingProfileName, mappingProfile, mappingProfileSave, mappingProfileApply uintptr
+	mappingLabels, mappingEdits                                                                      []uintptr
 }
 
 // All mutable presentation state belongs to this window, not to the legacy
@@ -472,6 +477,8 @@ func prestackCombo(id int, labels []string) uintptr {
 		minVisible, droppedWidth = 3, 150
 	case IDPRESTACK_PALETTE:
 		minVisible, droppedWidth = maxInt(4, len(labels)), 190
+	case IDPRESTACK_MAPPING_PROFILE:
+		minVisible, droppedWidth = 8, 240
 	case IDPRESTACK_KEY:
 		minVisible, droppedWidth = 24, 310
 	}
@@ -497,6 +504,8 @@ func prestackComboPopupHeight(id, fieldHeight int) int {
 		rows = 8
 	case IDPRESTACK_AXIS, IDPRESTACK_DISPLAY, IDPRESTACK_WIGGLE_DECIM, IDPRESTACK_MAPPING_TARGET:
 		rows = 2
+	case IDPRESTACK_MAPPING_PROFILE:
+		rows = 8
 	case IDPRESTACK_RAW_SAMPLE_MODE:
 		rows = 3
 	case IDPRESTACK_PALETTE:
@@ -644,6 +653,11 @@ func createPrestackControls() {
 	u.mapReset = prestackButton(IDPRESTACK_MAPRESET, "总图复位")
 	u.mappingAuto = prestackButton(IDPRESTACK_MAPPING_AUTO, "自动检测")
 	u.mappingApply = prestackButton(IDPRESTACK_MAPPING_APPLY, "确认映射并建立索引")
+	u.mappingProfileName = createCtrl(prestackHwnd, "EDIT", "", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 120, 24, IDPRESTACK_MAPPING_PROFILE_NAME)
+	u.mappingProfileLabel = createCtrl(prestackHwnd, "STATIC", "Profile", WS_CHILD, 0, 0, 52, 22, 0)
+	u.mappingProfile = prestackCombo(IDPRESTACK_MAPPING_PROFILE, nil)
+	u.mappingProfileSave = prestackButton(IDPRESTACK_MAPPING_PROFILE_SAVE, "保存 Profile")
+	u.mappingProfileApply = prestackButton(IDPRESTACK_MAPPING_PROFILE_APPLY, "应用 Profile")
 	u.mappingText = createCtrl(prestackHwnd, "EDIT", "", WS_CHILD|WS_BORDER|WS_VSCROLL|ES_READONLY|traceESMultiline|traceESAutoVScroll, 0, 0, 700, 300, 0)
 	u.qcExport = prestackButton(IDPRESTACK_QC_EXPORT, "导出 QC 报告")
 	u.exportGather = prestackButton(IDPRESTACK_EXPORT_GATHER, "导出道集")
@@ -677,6 +691,7 @@ func createPrestackControls() {
 		u.mappingLabels = append(u.mappingLabels, createCtrl(prestackHwnd, "STATIC", f.label+" byte", WS_CHILD, 0, 0, 190, 22, 0))
 		u.mappingEdits = append(u.mappingEdits, createCtrl(prestackHwnd, "EDIT", "", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 80, 24, IDPRESTACK_MAPBYTE+i))
 	}
+	loadPrestackMappingProfiles()
 	layoutPrestackControls()
 }
 
@@ -1319,6 +1334,11 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 	// The target occupies its own complete row. It used to overlap the first
 	// field label (84px), making the A/B selector partly hidden and unclickable.
 	place(u.compareMappingTarget, 18, 76, 150, 24, mapPage)
+	place(u.mappingProfileLabel, 180, 79, 52, 22, mapPage)
+	place(u.mappingProfileName, 234, 76, 120, 24, mapPage)
+	place(u.mappingProfileSave, 360, 76, 92, 24, mapPage)
+	place(u.mappingProfile, 458, 76, 190, 24, mapPage)
+	place(u.mappingProfileApply, 654, 76, 92, 24, mapPage)
 	const mappingFieldsTop, mappingButtonsTop, mappingSummaryTop = 108, 335, 373
 	for i := range u.mappingEdits {
 		col, row := i/7, i%7
@@ -4505,6 +4525,14 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 		case IDPRESTACK_MAPPING_APPLY:
 			applyPrestackMapping()
+		case IDPRESTACK_MAPPING_PROFILE_SAVE:
+			if code == 0 || code == 1 {
+				savePrestackMappingProfile()
+			}
+		case IDPRESTACK_MAPPING_PROFILE_APPLY:
+			if code == 0 || code == 1 {
+				applyPrestackMappingProfile()
+			}
 		case IDPRESTACK_QC_EXPORT:
 			exportPrestackQC()
 		case IDPRESTACK_FIGURE_EXPORT:

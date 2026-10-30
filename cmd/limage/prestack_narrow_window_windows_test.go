@@ -73,7 +73,7 @@ func prestackNarrowFixedControls(u *prestackControls) map[uintptr]bool {
 
 func TestPrestackNarrowViewportAndEveryScrollRequest(t *testing.T) {
 	for _, width := range prestackNarrowWidths {
-		for page, requiredWidth := range []int{1330, 670, 610, 1400, 160} {
+		for page, requiredWidth := range []int{1330, 670, 760, 1400, 160} {
 			t.Run(fmt.Sprintf("%d/page%d", width, page), func(t *testing.T) {
 				viewport := prestackToolbarViewportForSize(width, page)
 				wantCanvas := maxLayoutInt(width, requiredWidth)

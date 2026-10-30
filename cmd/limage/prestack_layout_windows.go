@@ -50,7 +50,7 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 	case 1:
 		controlWidth = 670
 	case 2:
-		controlWidth = 610
+		controlWidth = 760 // mapping target, profile controls and byte fields
 	case 3:
 		// Compare keeps every action on one horizontally scrollable toolbar row.
 		// The virtual canvas is wider than a narrow client so the native scrollbar
