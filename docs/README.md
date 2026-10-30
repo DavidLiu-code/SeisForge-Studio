@@ -7,6 +7,7 @@
 - [中文用户指南](USER_GUIDE.zh-CN.md)：从打开数据到二维、三维、弯线和 SEG-Y 分析的完整流程。
 - [快捷键与鼠标操作](SHORTCUTS.md)：二维、弯线、真三维和伪三维交互速查。
 - [生成叠前绘图代码](PRESTACK_FIGURE_REPLAY.md)：Gather / Compare 配方、一键复绘和像素一致性校验。
+- [叠前批量复现](PRESTACK_BATCH_REPLAY.md)：编排 Figure Recipe、流程快照和 QC 报告任务。
 - [叠前 Mapping Profile](PRESTACK_MAPPING_PROFILES.md)：保存、校验和切换 A/B 道头映射。
 - [叠前流程快照](PRESTACK_SESSION_SNAPSHOT.md)：保存和恢复 Gather、Compare、QC、Geometry、Mapping 状态。
 - [兼容性说明](COMPATIBILITY.md)：旧 Limage 设置、缓存、Recent 和许可证的保留策略。

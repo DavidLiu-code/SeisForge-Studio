@@ -1906,6 +1906,10 @@ func maxInt64(a, b int64) int64 {
 }
 
 func main() {
+	// Metadata-only batch plans run before any interactive windows are created.
+	if handled, code := handlePrestackBatchCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	// Recipe replay has its own off-screen renderer and license check. Dispatch
 	// it before creating any interactive windows or interpreting a file argument.
 	if handled, code := handlePrestackFigureCommand(os.Args[1:]); handled {
