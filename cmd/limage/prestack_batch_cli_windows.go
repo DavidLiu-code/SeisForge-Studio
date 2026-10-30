@@ -74,6 +74,9 @@ func runPrestackBatchPlan(ctx context.Context, options prestackBatchCLIOptions) 
 	if err != nil {
 		return err
 	}
+	if plan.ApplicationVersion != APP_VERSION {
+		return fmt.Errorf("batch plan application version %q does not match renderer %q", plan.ApplicationVersion, APP_VERSION)
+	}
 	for _, job := range plan.Figures {
 		if err := ctx.Err(); err != nil {
 			return err
