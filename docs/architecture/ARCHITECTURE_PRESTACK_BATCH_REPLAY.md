@@ -20,10 +20,11 @@ independently, use `BuildIndexCached`, select the snapshot gather, and export
 only QC metadata. No reader, amplitude buffer, HWND, or runtime generation is
 serialized into the plan.
 
-The Gather/Compare UI currently captures the runtime-neutral session snapshot
-and creates one QC job through `BatchPlanDraft`. Figure capture remains a
-separate Figure Recipe operation so the existing pixel-identical renderer and
-its cancellation lifecycle are not duplicated in the plan builder.
+The Gather/Compare UI captures the runtime-neutral session snapshot and first
+publishes a QC-only plan through `BatchPlanDraft`. It then reuses the existing
+pixel-identical Figure renderer in a cancellable background task. Only after
+the `.figure` bundle is complete does the UI atomically replace the plan with
+the Figure + QC version; failures leave the QC-only plan intact.
 
 The same pages expose a background plan runner. It delegates to the existing
 executor, owns a cancellable context, and publishes only a result carrying the

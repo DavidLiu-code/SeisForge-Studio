@@ -27,10 +27,9 @@ type prestackBatchDoneResult struct {
 
 var prestackBatchDone = make(chan prestackBatchDoneResult, 4)
 
-// savePrestackBatchPlan captures the current A/session state into a small
-// snapshot beside the plan, then creates a metadata-only QC job. Figure jobs
-// continue to use the existing "生成绘图代码" recipe capture button; a later
-// plan can include those recipe.json files together with this QC job.
+// savePrestackBatchPlan captures the current A/session state beside the plan,
+// publishes a QC-only plan immediately, and then lets the background figure
+// stage atomically add the current Gather/Compare recipe when it is valid.
 func savePrestackBatchPlan() {
 	if prestackState.page != 0 && prestackState.page != 3 {
 		message(prestackHwnd, "保存批处理计划", "请在 Gather 或 Compare 页面保存批处理计划。", MB_OK|MB_ICONINFORMATION)
@@ -51,6 +50,15 @@ func savePrestackBatchPlan() {
 	root := filepath.Dir(planPath)
 	stem := strings.TrimSuffix(filepath.Base(planPath), filepath.Ext(planPath))
 	sessionPath := filepath.Join(root, stem+".session.json")
+	for _, output := range []string{filepath.Join(root, stem+".figure"), filepath.Join(root, stem+".png"), filepath.Join(root, stem+".figure.result.json"), filepath.Join(root, stem+"_qc.json")} {
+		if _, err := os.Lstat(output); err == nil {
+			message(prestackHwnd, "保存批处理计划", "计划输出已存在，请选择新的文件名："+filepath.Base(output), MB_OK|MB_ICONINFORMATION)
+			return
+		} else if !os.IsNotExist(err) {
+			message(prestackHwnd, "保存批处理计划", err.Error(), MB_OK|MB_ICONERROR)
+			return
+		}
+	}
 	if _, err := os.Lstat(planPath); err == nil {
 		message(prestackHwnd, "保存批处理计划", "目标计划已存在；请选择新的文件名。", MB_OK|MB_ICONINFORMATION)
 		return
@@ -90,6 +98,9 @@ func savePrestackBatchPlan() {
 	if err := prestackbatch.Save(planPath, plan, false); err != nil {
 		_ = os.Remove(sessionPath)
 		message(prestackHwnd, "保存批处理计划", "保存计划失败："+err.Error(), MB_OK|MB_ICONERROR)
+		return
+	}
+	if startPrestackBatchPlanFigure(planPath, sessionPath, root, stem) {
 		return
 	}
 	setPrestackStatus(fmt.Sprintf("批处理计划已保存：%s（当前道集 QC）", planPath))

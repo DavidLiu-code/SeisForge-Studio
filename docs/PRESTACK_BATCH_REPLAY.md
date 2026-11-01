@@ -38,11 +38,14 @@ Figure 任务复用已验证的绘图 recipe 渲染器；QC 任务重新打开�
 ```text
 <名称>_batch.json
 <名称>_batch.session.json
+<名称>.figure/recipe.json
+<名称>.png
+<名称>_qc.json
 ```
 
-当前界面入口先保存当前 A/Compare 状态对应的 QC JSON 任务；图片任务仍通过
-“生成绘图代码”先创建 Figure Recipe，再将 recipe 路径加入计划。后续可在不改变
-计划格式的前提下增加任务列表编辑和图片任务自动串接。
+当前界面入口先保存当前 A/Compare 状态对应的 QC JSON 任务，然后在后台尝试生成
+当前 Figure Recipe。Figure 通过完整源文件 SHA-256、重新渲染和逐像素校验后，
+才原子加入同一计划；失败时保留 QC-only 计划并在状态栏提示原因。
 
 保存后可在 Gather 或 Compare 页点击“执行批处理计划”，选择已有的计划文件。
 执行在后台完成，按钮会变为“取消批处理”；切换工作区或关闭窗口会取消任务，

@@ -109,6 +109,7 @@ const (
 	WM_PRESTACK_FIGURE_DONE        = WM_USER + 620
 	WM_PRESTACK_FIGURE_PROGRESS    = WM_USER + 621
 	WM_PRESTACK_BATCH_DONE         = WM_USER + 622
+	WM_PRESTACK_BATCH_PLAN_DONE    = WM_USER + 623
 	WM_TIMER                       = 0x0113
 	prestackCtrlClickTimer         = 1
 	// Mouse capture belongs to the scene only while a drag is active.  A
@@ -235,6 +236,8 @@ type prestackSession struct {
 	compareRendering                              bool
 	batchCancel                                   context.CancelFunc
 	batchGeneration                               int64
+	batchPlanCancel                               context.CancelFunc
+	batchPlanGeneration                           int64
 	compareA, compareB, compareDelta              []byte
 	compareWidth, compareHeight                   int
 	compareViewFirst, compareViewLast             int
@@ -1855,6 +1858,7 @@ func setPrestackProgress(done bool, label string) {
 func cancelPrestackJobs() {
 	cancelPrestackFigureExport()
 	cancelPrestackBatchRun()
+	cancelPrestackBatchPlanFigure()
 	if prestackState.compareBCancel != nil {
 		prestackState.compareBCancel()
 		prestackState.compareBCancel = nil
@@ -4483,6 +4487,9 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_PRESTACK_BATCH_DONE:
 		receivePrestackBatchDone()
+		return 0
+	case WM_PRESTACK_BATCH_PLAN_DONE:
+		receivePrestackBatchPlanFigure()
 		return 0
 	case WM_PRESTACK_EXPORT_PROGRESS:
 		if int64(wParam) == prestackState.exportGeneration && prestackState.dataset != nil {
