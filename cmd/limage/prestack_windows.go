@@ -87,6 +87,7 @@ const (
 	IDPRESTACK_FIGURE_EXPORT
 	IDPRESTACK_SESSION_SAVE
 	IDPRESTACK_SESSION_OPEN
+	IDPRESTACK_BATCH_PLAN
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -136,6 +137,7 @@ type prestackControls struct {
 	qcExport, exportGather, exportCSV                                                                uintptr
 	figureExport                                                                                     uintptr
 	sessionSave, sessionOpen                                                                         uintptr
+	batchPlan                                                                                        uintptr
 	compareOpenB, compareCloseB, compareExport                                                       uintptr
 	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly               uintptr
 	compareFilterAmbiguous, compareFilterInvalid                                                     uintptr
@@ -665,6 +667,7 @@ func createPrestackControls() {
 	u.figureExport = prestackButton(IDPRESTACK_FIGURE_EXPORT, "生成绘图代码")
 	u.sessionSave = prestackButton(IDPRESTACK_SESSION_SAVE, "保存流程")
 	u.sessionOpen = prestackButton(IDPRESTACK_SESSION_OPEN, "打开流程")
+	u.batchPlan = prestackButton(IDPRESTACK_BATCH_PLAN, "保存批处理计划")
 	u.compareOpenB = prestackButton(IDPRESTACK_COMPARE_OPEN_B, "加载 B")
 	u.compareCloseB = prestackButton(IDPRESTACK_COMPARE_CLOSE_B, "关闭 B")
 	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出匹配报告")
@@ -1162,6 +1165,7 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 	// so switching pages cannot leave a stale button over QC or Geometry.
 	place(u.sessionSave, 0, 0, 1, 1, false)
 	place(u.sessionOpen, 0, 0, 1, 1, false)
+	place(u.batchPlan, 0, 0, 1, 1, false)
 	x, y := 10, 76
 	// Raw file-order mode uses the same two-row toolbar as the other gather
 	// modes.  Keep the range controls on row one and the common display
@@ -1222,13 +1226,15 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		x += 72
 		place(u.exportGather, x, y, 82, 24, true)
 		x += 88
-		place(u.exportCSV, x, y, 82, 24, true)
-		x += 88
-		place(u.figureExport, x, y, 110, 24, true)
-		x += 118
-		place(u.sessionSave, x, y, 78, 24, true)
-		x += 84
-		place(u.sessionOpen, x, y, 78, 24, true)
+		place(u.exportCSV, x, y, 80, 24, true)
+		x += 82
+		place(u.figureExport, x, y, 102, 24, true)
+		x += 110
+		place(u.sessionSave, x, y, 74, 24, true)
+		x += 80
+		place(u.sessionOpen, x, y, 74, 24, true)
+		x += 80
+		place(u.batchPlan, x, y, 100, 24, true)
 	} else {
 		// Keep keyed gathers on the same deliberate two-row grid.  The old
 		// wrapping loop counted hidden raw controls when calculating x, which
@@ -1317,13 +1323,15 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		x += 72
 		place(u.exportGather, x, y, 82, 24, g)
 		x += 88
-		place(u.exportCSV, x, y, 82, 24, g)
-		x += 88
-		place(u.figureExport, x, y, 110, 24, g)
-		x += 118
-		place(u.sessionSave, x, y, 78, 24, g)
-		x += 84
-		place(u.sessionOpen, x, y, 78, 24, g)
+		place(u.exportCSV, x, y, 80, 24, g)
+		x += 82
+		place(u.figureExport, x, y, 102, 24, g)
+		x += 110
+		place(u.sessionSave, x, y, 74, 24, g)
+		x += 80
+		place(u.sessionOpen, x, y, 74, 24, g)
+		x += 80
+		place(u.batchPlan, x, y, 100, 24, g)
 	}
 	m := state.page == 1
 	for i, c := range u.layers {
@@ -1400,6 +1408,7 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.figureExport, displayX+536, 78, 110, 27, true)
 		place(u.sessionSave, displayX+652, 78, 78, 27, true)
 		place(u.sessionOpen, displayX+736, 78, 78, 27, true)
+		place(u.batchPlan, displayX+820, 78, 118, 27, true)
 	}
 }
 func prestackSceneRect() RECT {
@@ -4546,6 +4555,10 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		case IDPRESTACK_SESSION_OPEN:
 			if code == 0 || code == 1 {
 				openPrestackSessionSnapshot()
+			}
+		case IDPRESTACK_BATCH_PLAN:
+			if code == 0 || code == 1 {
+				savePrestackBatchPlan()
 			}
 		case IDPRESTACK_COMPARE_OPEN_B:
 			if code == 0 || code == 1 {

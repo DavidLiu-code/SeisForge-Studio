@@ -52,3 +52,28 @@ func TestPlanRejectsEscapeAndOverwrite(t *testing.T) {
 		t.Fatalf("expected overwrite protection, got %v", err)
 	}
 }
+
+func TestBatchPlanDraftClonesAndBuilds(t *testing.T) {
+	dir := t.TempDir()
+	recipe := filepath.Join(dir, "recipe.json")
+	source := filepath.Join(dir, "a.sgy")
+	manifest := figurebundle.BundleManifest{Schema: figurebundle.Schema, ApplicationVersion: "test", SourceA: figurebundle.SourceIdentity{Path: source, Size: 1, ModifiedUnixNano: 2, SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, RendererSHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PixelSHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Width: 1, Height: 1, Payload: []byte(`{"mode":"image"}`)}
+	data, _ := json.Marshal(manifest)
+	if err := os.WriteFile(recipe, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	draft := NewDraft("test", filepath.Join(dir, "out"))
+	draft.AddFigure(recipe, "image.png", "image.result.json")
+	clone := draft.Clone()
+	clone.Figures[0].Output = "changed.png"
+	if draft.Figures[0].Output == clone.Figures[0].Output {
+		t.Fatal("draft clone aliases figure inputs")
+	}
+	plan, err := draft.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Figures) != 1 || filepath.Base(plan.Figures[0].Output) != "image.png" {
+		t.Fatalf("unexpected plan: %+v", plan.Figures)
+	}
+}

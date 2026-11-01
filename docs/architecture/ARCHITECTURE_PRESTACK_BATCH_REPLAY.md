@@ -19,3 +19,8 @@ failed job. Figure jobs use the existing recipe renderer; QC jobs open A
 independently, use `BuildIndexCached`, select the snapshot gather, and export
 only QC metadata. No reader, amplitude buffer, HWND, or runtime generation is
 serialized into the plan.
+
+The Gather/Compare UI currently captures the runtime-neutral session snapshot
+and creates one QC job through `BatchPlanDraft`. Figure capture remains a
+separate Figure Recipe operation so the existing pixel-identical renderer and
+its cancellation lifecycle are not duplicated in the plan builder.

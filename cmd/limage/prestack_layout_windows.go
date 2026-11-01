@@ -58,9 +58,11 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 		// sizes.
 		controlWidth = 1400
 		if state != nil && state.compareBDataset == nil && !state.compareBLoading {
-			// Before B is loaded the filters and close/export controls are hidden;
-			// the palette/range/session controls end at roughly 914px.
-			controlWidth = 914
+			// Before B is loaded the filters and close/export controls are hidden,
+			// but the batch-plan action is still part of the row. Keep enough
+			// virtual width for every control so narrow-window scrolling can
+			// expose the complete toolbar without clipping the last button.
+			controlWidth = 1040
 		}
 	case 4:
 		controlWidth = 160
