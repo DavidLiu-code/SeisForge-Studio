@@ -3,10 +3,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -14,6 +16,16 @@ import (
 	"github.com/DavidLiu-code/SeisForge-Studio/internal/prestackbatch"
 	prestacksession "github.com/DavidLiu-code/SeisForge-Studio/internal/prestacksession"
 )
+
+type prestackBatchDoneResult struct {
+	owner      uintptr
+	ownerToken int64
+	generation int64
+	plan       string
+	err        error
+}
+
+var prestackBatchDone = make(chan prestackBatchDoneResult, 4)
 
 // savePrestackBatchPlan captures the current A/session state into a small
 // snapshot beside the plan, then creates a metadata-only QC job. Figure jobs
@@ -94,4 +106,80 @@ func savePrestackBatchPlanDialog(owner uintptr, defaultName string) string {
 		return syscall.UTF16ToString(buf)
 	}
 	return ""
+}
+
+func openPrestackBatchPlanDialog(owner uintptr) string {
+	buf := make([]uint16, 32768)
+	filter := utf16.Encode([]rune("叠前批处理计划 (*.json)\x00*.json\x00所有文件 (*.*)\x00*.*\x00\x00"))
+	of := OPENFILENAME{LStructSize: uint32(unsafe.Sizeof(OPENFILENAME{})), HwndOwner: owner,
+		NFilterIndex: 1, LpstrFilter: uintptr(unsafe.Pointer(&filter[0])), LpstrFile: uintptr(unsafe.Pointer(&buf[0])),
+		NMaxFile: uint32(len(buf)), Flags: OFN_EXPLORER | OFN_FILEMUSTEXIST, LpstrDefExt: uintptr(unsafe.Pointer(u16("json")))}
+	if ok, _, _ := pGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&of))); ok != 0 {
+		return syscall.UTF16ToString(buf)
+	}
+	return ""
+}
+
+// runPrestackBatchPlanFromDialog is a UI-thread toggle. The executor owns
+// all readers and temporary outputs; the window only receives a final result
+// tagged with owner/generation so a closed or replaced workspace cannot be
+// updated by an old worker.
+func runPrestackBatchPlanFromDialog() {
+	if prestackState.batchCancel != nil {
+		cancelPrestackBatchRun()
+		setPrestackStatus("已请求取消批处理；正在等待当前任务释放资源…")
+		return
+	}
+	path := openPrestackBatchPlanDialog(prestackHwnd)
+	if path == "" {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	gen := atomic.AddInt64(&prestackGeneration, 1)
+	owner, ownerToken := prestackHwnd, prestackState.ownerToken
+	prestackState.batchCancel, prestackState.batchGeneration = cancel, gen
+	setText(prestackUI.batchRun, "取消批处理")
+	setPrestackStatus("正在执行批处理计划：" + path)
+	go func() {
+		err := runPrestackBatchPlan(ctx, prestackBatchCLIOptions{plan: path})
+		result := prestackBatchDoneResult{owner: owner, ownerToken: ownerToken, generation: gen, plan: path, err: err}
+		select {
+		case prestackBatchDone <- result:
+		default:
+		}
+		if owner != 0 {
+			pPostMessageW.Call(owner, WM_PRESTACK_BATCH_DONE, uintptr(gen), 0)
+		}
+	}()
+}
+
+func cancelPrestackBatchRun() {
+	if prestackState.batchCancel != nil {
+		prestackState.batchCancel()
+		prestackState.batchCancel = nil
+		prestackState.batchGeneration = atomic.AddInt64(&prestackGeneration, 1)
+		if prestackUI.batchRun != 0 {
+			setText(prestackUI.batchRun, "执行批处理计划")
+		}
+	}
+}
+
+func receivePrestackBatchDone() {
+	for {
+		select {
+		case result := <-prestackBatchDone:
+			if result.owner != prestackHwnd || result.ownerToken != prestackState.ownerToken || result.generation != prestackState.batchGeneration {
+				continue
+			}
+			prestackState.batchCancel = nil
+			setText(prestackUI.batchRun, "执行批处理计划")
+			if result.err != nil {
+				setPrestackStatus("批处理失败：" + result.err.Error())
+			} else {
+				setPrestackStatus("批处理完成：" + result.plan)
+			}
+		default:
+			return
+		}
+	}
 }

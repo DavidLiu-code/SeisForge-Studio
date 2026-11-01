@@ -45,7 +45,7 @@ func prestackToolbarViewportForSize(width, page int) prestackToolbarViewport {
 // only position where a control can be fully reached.
 func prestackToolbarViewportForState(width, page int, state *prestackSession) prestackToolbarViewport {
 	width = maxLayoutInt(1, width)
-	controlWidth := 1330 // compact Gather/Raw toolbars, including session controls
+	controlWidth := 1440 // compact Gather/Raw toolbars, including batch controls
 	switch page {
 	case 1:
 		controlWidth = 670
@@ -62,7 +62,7 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 			// but the batch-plan action is still part of the row. Keep enough
 			// virtual width for every control so narrow-window scrolling can
 			// expose the complete toolbar without clipping the last button.
-			controlWidth = 1040
+			controlWidth = 1170
 		}
 	case 4:
 		controlWidth = 160

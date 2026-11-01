@@ -24,3 +24,8 @@ The Gather/Compare UI currently captures the runtime-neutral session snapshot
 and creates one QC job through `BatchPlanDraft`. Figure capture remains a
 separate Figure Recipe operation so the existing pixel-identical renderer and
 its cancellation lifecycle are not duplicated in the plan builder.
+
+The same pages expose a background plan runner. It delegates to the existing
+executor, owns a cancellable context, and publishes only a result carrying the
+window owner, owner token, and batch generation. Closing the workspace or
+starting another run invalidates that token and prevents stale status updates.
