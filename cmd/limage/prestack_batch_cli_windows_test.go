@@ -11,8 +11,8 @@ import (
 )
 
 func TestParsePrestackBatchCommand(t *testing.T) {
-	o, err := parsePrestackBatchCommand([]string{"--batch-plan", "plan.json", "--overwrite"})
-	if err != nil || o.plan != "plan.json" || !o.overwrite {
+	o, err := parsePrestackBatchCommand([]string{"--batch-plan", "plan.json", "--batch-report", "run.json", "--overwrite"})
+	if err != nil || o.plan != "plan.json" || o.report != "run.json" || !o.overwrite {
 		t.Fatalf("parse batch plan: %+v, %v", o, err)
 	}
 	for _, args := range [][]string{{"--batch-plan"}, {"--batch-plan", "plan.json", "extra"}} {

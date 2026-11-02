@@ -255,3 +255,53 @@ func TestPlanEditorTaskGroupsRemainFigureThenQC(t *testing.T) {
 		t.Fatalf("IDs were not deterministically regenerated: %+v", tasks)
 	}
 }
+
+func TestExecutionReportRoundTripAndAtomicState(t *testing.T) {
+	plan := editorFixture(t)
+	report := NewExecutionReport(filepath.Join(t.TempDir(), "plan.json"), plan, "run-1", false)
+	if len(report.Tasks) != 3 || report.Tasks[0].Kind != JobFigure || report.Tasks[2].Kind != JobQC {
+		t.Fatalf("unexpected execution task order: %+v", report.Tasks)
+	}
+	if err := report.SetTask(0, ExecutionSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := report.SetTask(1, ExecutionFailed, "destination exists"); err != nil {
+		t.Fatal(err)
+	}
+	if err := report.Finish(ExecutionFailed, "figure-002 failed"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "run.execution.json")
+	if err := SaveExecutionReport(path, report, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadExecutionReport(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != ExecutionFailed || loaded.Tasks[1].Error != "destination exists" {
+		t.Fatalf("round-trip lost task status: %+v", loaded)
+	}
+	loaded.Tasks[0].Status = ExecutionFailed
+	if report.Tasks[0].Status != ExecutionSucceeded {
+		t.Fatal("loaded report was not a defensive task copy")
+	}
+	if got := ExecutionReportPath("x.json"); got != "x.execution.json" {
+		t.Fatalf("unexpected default sidecar path %q", got)
+	}
+}
+
+func TestExecutionReportRejectsInvalidMutationWithoutPublish(t *testing.T) {
+	plan := editorFixture(t)
+	report := NewExecutionReport(filepath.Join(t.TempDir(), "plan.json"), plan, "run-2", false)
+	if err := report.SetTask(0, ExecutionStatus("bogus"), ""); err == nil {
+		t.Fatal("expected invalid task status rejection")
+	}
+	if err := report.Finish(ExecutionPending, ""); err == nil {
+		t.Fatal("expected invalid final status rejection")
+	}
+	report.Tasks[0].Result = ""
+	if err := ValidateExecutionReport(report); err == nil {
+		t.Fatal("expected missing figure result rejection")
+	}
+}

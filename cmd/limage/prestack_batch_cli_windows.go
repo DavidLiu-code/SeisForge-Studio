@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DavidLiu-code/SeisForge-Studio/internal/figurebundle"
 	"github.com/DavidLiu-code/SeisForge-Studio/internal/prestack"
@@ -22,6 +23,7 @@ import (
 
 type prestackBatchCLIOptions struct {
 	plan      string
+	report    string
 	overwrite bool
 }
 
@@ -56,12 +58,13 @@ func parsePrestackBatchCommand(args []string) (prestackBatchCLIOptions, error) {
 	f := flag.NewFlagSet("batch-plan", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.StringVar(&o.plan, "batch-plan", "", "prestack batch plan JSON")
+	f.StringVar(&o.report, "batch-report", "", "execution report sidecar JSON (default: beside plan)")
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace existing figure/QC outputs")
 	if err := f.Parse(args); err != nil {
 		return o, err
 	}
 	if f.NArg() != 0 || strings.TrimSpace(o.plan) == "" {
-		return o, errors.New("use --batch-plan plan.json [--overwrite]")
+		return o, errors.New("use --batch-plan plan.json [--batch-report report.json] [--overwrite]")
 	}
 	return o, nil
 }
@@ -77,26 +80,66 @@ func runPrestackBatchPlan(ctx context.Context, options prestackBatchCLIOptions) 
 	if plan.ApplicationVersion != APP_VERSION {
 		return fmt.Errorf("batch plan application version %q does not match renderer %q", plan.ApplicationVersion, APP_VERSION)
 	}
-	for _, job := range plan.Figures {
+	reportPath := options.report
+	if strings.TrimSpace(reportPath) == "" {
+		reportPath = prestackbatch.ExecutionReportPath(options.plan)
+	}
+	report := prestackbatch.NewExecutionReport(options.plan, plan, fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), options.overwrite)
+	writeReport := func() {
+		if err := prestackbatch.SaveExecutionReport(reportPath, report, true); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: unable to save batch execution report:", err)
+		}
+	}
+	writeReport()
+	for i, job := range plan.Figures {
 		if err := ctx.Err(); err != nil {
+			_ = report.Finish(prestackbatch.ExecutionCanceled, err.Error())
+			writeReport()
 			return err
 		}
+		_ = report.SetTask(i, prestackbatch.ExecutionRunning, "")
+		writeReport()
 		run := prestackFigureCLIOptions{recipe: job.Recipe, output: job.Output, result: job.Result, overwrite: options.overwrite, sourceA: job.SourceA.Path}
 		if job.SourceB != nil {
 			run.sourceB = job.SourceB.Path
 		}
 		if _, err := runPrestackFigureCommand(ctx, run, authorizePrestackFigureCommand); err != nil {
+			status := prestackbatch.ExecutionFailed
+			if ctx.Err() != nil {
+				status = prestackbatch.ExecutionCanceled
+			}
+			_ = report.SetTask(i, status, err.Error())
+			_ = report.Finish(status, err.Error())
+			writeReport()
 			return fmt.Errorf("figure %s: %w", job.ID, err)
 		}
+		_ = report.SetTask(i, prestackbatch.ExecutionSucceeded, "")
+		writeReport()
 	}
-	for _, job := range plan.QCReports {
+	for i, job := range plan.QCReports {
+		taskIndex := len(plan.Figures) + i
 		if err := ctx.Err(); err != nil {
+			_ = report.Finish(prestackbatch.ExecutionCanceled, err.Error())
+			writeReport()
 			return err
 		}
+		_ = report.SetTask(taskIndex, prestackbatch.ExecutionRunning, "")
+		writeReport()
 		if err := runPrestackBatchQCJob(ctx, job, options.overwrite); err != nil {
+			status := prestackbatch.ExecutionFailed
+			if ctx.Err() != nil {
+				status = prestackbatch.ExecutionCanceled
+			}
+			_ = report.SetTask(taskIndex, status, err.Error())
+			_ = report.Finish(status, err.Error())
+			writeReport()
 			return fmt.Errorf("QC %s: %w", job.ID, err)
 		}
+		_ = report.SetTask(taskIndex, prestackbatch.ExecutionSucceeded, "")
+		writeReport()
 	}
+	_ = report.Finish(prestackbatch.ExecutionSucceeded, "")
+	writeReport()
 	return nil
 }
 

@@ -22,6 +22,7 @@ type prestackBatchDoneResult struct {
 	ownerToken int64
 	generation int64
 	plan       string
+	report     string
 	err        error
 }
 
@@ -153,7 +154,7 @@ func runPrestackBatchPlanFromDialog() {
 	setPrestackStatus("正在执行批处理计划：" + path)
 	go func() {
 		err := runPrestackBatchPlan(ctx, prestackBatchCLIOptions{plan: path})
-		result := prestackBatchDoneResult{owner: owner, ownerToken: ownerToken, generation: gen, plan: path, err: err}
+		result := prestackBatchDoneResult{owner: owner, ownerToken: ownerToken, generation: gen, plan: path, report: prestackbatch.ExecutionReportPath(path), err: err}
 		select {
 		case prestackBatchDone <- result:
 		default:
@@ -187,7 +188,7 @@ func receivePrestackBatchDone() {
 			if result.err != nil {
 				setPrestackStatus("批处理失败：" + result.err.Error())
 			} else {
-				setPrestackStatus("批处理完成：" + result.plan)
+				setPrestackStatus("批处理完成：" + result.plan + "；执行报告：" + result.report)
 			}
 		default:
 			return
