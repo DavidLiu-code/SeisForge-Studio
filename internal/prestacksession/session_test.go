@@ -60,6 +60,21 @@ func TestCaptureApplyDefensiveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGatherOnlySnapshotAllowsCompareSentinelRange(t *testing.T) {
+	state := validState()
+	state.Compare = CompareState{Enabled: false, SampleStart: 0, SampleEnd: 0, ViewXMin: 0, ViewXMax: -1, ViewYMin: 0, ViewYMax: -1}
+	s, err := CapturePrestackSessionSnapshot(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Compare.Enabled {
+		t.Fatal("gather-only snapshot unexpectedly enabled Compare")
+	}
+	if err := ValidatePrestackSessionSnapshot(s); err != nil {
+		t.Fatalf("gather-only sentinel Compare range rejected: %v", err)
+	}
+}
+
 func TestValidateRejectsInvalidValuesAndUnknownSchema(t *testing.T) {
 	cases := []struct {
 		name string

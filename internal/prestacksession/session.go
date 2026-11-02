@@ -215,6 +215,13 @@ func validateDisplay(d DisplayState) error {
 }
 
 func validateCompare(c CompareState) error {
+	// Gather-only snapshots keep the live Compare view at its sentinel range
+	// (0,-1) until a B dataset is loaded.  That range is not meaningful when
+	// Compare is disabled, so do not reject an otherwise valid Gather snapshot
+	// because of stale Compare-only state.
+	if !c.Enabled {
+		return nil
+	}
 	if c.BSource != nil {
 		if err := validateSource(*c.BSource, "B", false); err != nil {
 			return err
