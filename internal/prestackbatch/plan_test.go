@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DavidLiu-code/SeisForge-Studio/internal/figurebundle"
@@ -75,5 +76,96 @@ func TestBatchPlanDraftClonesAndBuilds(t *testing.T) {
 	}
 	if len(plan.Figures) != 1 || filepath.Base(plan.Figures[0].Output) != "image.png" {
 		t.Fatalf("unexpected plan: %+v", plan.Figures)
+	}
+}
+
+func editorFixture(t *testing.T) Plan {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "out")
+	return Plan{
+		SchemaVersion: SchemaVersion, ApplicationVersion: "test", OutputDirectory: root,
+		Figures: []FigureJob{
+			{ID: "figure-001", Recipe: filepath.Join(root, "r1.json"), Output: filepath.Join(root, "one.png"), Result: filepath.Join(root, "one.result.json"), SourceA: SourceIdentity{Path: "a.sgy", Size: 1, ModifiedUnixNano: 2}},
+			{ID: "figure-002", Recipe: filepath.Join(root, "r2.json"), Output: filepath.Join(root, "two.png"), Result: filepath.Join(root, "two.result.json"), SourceA: SourceIdentity{Path: "a.sgy", Size: 1, ModifiedUnixNano: 2}},
+		},
+		QCReports: []QCJob{{ID: "qc-001", Session: filepath.Join(root, "s.json"), Source: SourceIdentity{Path: "a.sgy", Size: 1, ModifiedUnixNano: 2}, Output: filepath.Join(root, "qc.json"), Format: ReportJSON}},
+	}
+}
+
+func TestPlanEditorMovesRemovesAndUpdatesTasks(t *testing.T) {
+	editor, err := NewEditor(editorFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks := editor.Tasks()
+	if len(tasks) != 3 || tasks[0].Ref.ID != "figure-001" || tasks[2].Ref.Kind != JobQC {
+		t.Fatalf("unexpected task list: %+v", tasks)
+	}
+	if err := editor.Move(TaskRef{Kind: JobFigure, ID: "figure-001"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := editor.Plan().Figures[1].Recipe; !strings.HasSuffix(got, "r1.json") {
+		t.Fatalf("move did not reorder figures: %+v", editor.Plan().Figures)
+	}
+	if err := editor.UpdateFigureOutput(TaskRef{Kind: JobFigure, ID: "figure-002"}, "edited.png", "edited.result.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.UpdateQCOutput(TaskRef{Kind: JobQC, ID: "qc-001"}, "edited.csv", ReportCSV); err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.Remove(TaskRef{Kind: JobFigure, ID: "figure-001"}); err != nil {
+		t.Fatal(err)
+	}
+	p := editor.Plan()
+	if len(p.Figures) != 1 || p.Figures[0].ID != "figure-001" || filepath.Base(p.Figures[0].Output) != "edited.png" {
+		t.Fatalf("unexpected edited plan: %+v", p)
+	}
+	if len(p.QCReports) != 1 || p.QCReports[0].Format != ReportCSV || filepath.Base(p.QCReports[0].Output) != "edited.csv" {
+		t.Fatalf("unexpected QC edit: %+v", p.QCReports[0])
+	}
+}
+
+func TestPlanEditorRemapsDirectoryAndReturnsDefensiveCopy(t *testing.T) {
+	p := editorFixture(t)
+	editor, err := NewEditor(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRoot := filepath.Join(t.TempDir(), "new-out")
+	if err := editor.SetOutputDirectory(newRoot); err != nil {
+		t.Fatal(err)
+	}
+	got := editor.Plan()
+	if got.OutputDirectory != newRoot || filepath.Dir(got.Figures[0].Output) != newRoot || filepath.Dir(got.QCReports[0].Output) != newRoot {
+		t.Fatalf("output directory was not remapped: %+v", got)
+	}
+	got.Figures[0].Output = "mutated"
+	if editor.Plan().Figures[0].Output == "mutated" {
+		t.Fatal("Plan returned an aliased figure slice")
+	}
+	if err := editor.UpdateFigureOutput(TaskRef{Kind: JobFigure, ID: "figure-001"}, "../escape.png", "ok.result.json"); err == nil {
+		t.Fatal("expected output escape rejection")
+	}
+}
+
+func TestPlanEditorRejectsDuplicateOutputWithoutMutation(t *testing.T) {
+	editor, err := NewEditor(editorFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := editor.Plan()
+	if err := editor.UpdateFigureOutput(TaskRef{Kind: JobFigure, ID: "figure-001"}, "two.png", "one.result.json"); err == nil {
+		t.Fatal("expected duplicate figure output rejection")
+	}
+	after := editor.Plan()
+	if after.Figures[0].Output != before.Figures[0].Output || after.Figures[0].Result != before.Figures[0].Result {
+		t.Fatalf("failed figure update mutated plan: before=%+v after=%+v", before.Figures[0], after.Figures[0])
+	}
+	if err := editor.UpdateQCOutput(TaskRef{Kind: JobQC, ID: "qc-001"}, "two.png", ReportCSV); err == nil {
+		t.Fatal("expected duplicate QC output rejection")
+	}
+	after = editor.Plan()
+	if after.QCReports[0].Output != before.QCReports[0].Output || after.QCReports[0].Format != before.QCReports[0].Format {
+		t.Fatalf("failed QC update mutated plan: before=%+v after=%+v", before.QCReports[0], after.QCReports[0])
 	}
 }
