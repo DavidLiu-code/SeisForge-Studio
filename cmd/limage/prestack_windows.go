@@ -89,6 +89,7 @@ const (
 	IDPRESTACK_SESSION_OPEN
 	IDPRESTACK_BATCH_PLAN
 	IDPRESTACK_BATCH_RUN
+	IDPRESTACK_BATCH_EDIT
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -140,7 +141,7 @@ type prestackControls struct {
 	qcExport, exportGather, exportCSV                                                                uintptr
 	figureExport                                                                                     uintptr
 	sessionSave, sessionOpen                                                                         uintptr
-	batchPlan, batchRun                                                                              uintptr
+	batchPlan, batchRun, batchEdit                                                                   uintptr
 	compareOpenB, compareCloseB, compareExport                                                       uintptr
 	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly               uintptr
 	compareFilterAmbiguous, compareFilterInvalid                                                     uintptr
@@ -676,6 +677,7 @@ func createPrestackControls() {
 	u.sessionOpen = prestackButton(IDPRESTACK_SESSION_OPEN, "打开流程")
 	u.batchPlan = prestackButton(IDPRESTACK_BATCH_PLAN, "保存批处理计划")
 	u.batchRun = prestackButton(IDPRESTACK_BATCH_RUN, "执行批处理计划")
+	u.batchEdit = prestackButton(IDPRESTACK_BATCH_EDIT, "编辑批处理计划")
 	u.compareOpenB = prestackButton(IDPRESTACK_COMPARE_OPEN_B, "加载 B")
 	u.compareCloseB = prestackButton(IDPRESTACK_COMPARE_CLOSE_B, "关闭 B")
 	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出匹配报告")
@@ -1175,6 +1177,7 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 	place(u.sessionOpen, 0, 0, 1, 1, false)
 	place(u.batchPlan, 0, 0, 1, 1, false)
 	place(u.batchRun, 0, 0, 1, 1, false)
+	place(u.batchEdit, 0, 0, 1, 1, false)
 	x, y := 10, 76
 	// Raw file-order mode uses the same two-row toolbar as the other gather
 	// modes.  Keep the range controls on row one and the common display
@@ -1246,6 +1249,8 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.batchPlan, x, y, 100, 24, true)
 		x += 106
 		place(u.batchRun, x, y, 100, 24, true)
+		x += 106
+		place(u.batchEdit, x, y, 110, 24, true)
 	} else {
 		// Keep keyed gathers on the same deliberate two-row grid.  The old
 		// wrapping loop counted hidden raw controls when calculating x, which
@@ -1345,6 +1350,8 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.batchPlan, x, y, 100, 24, g)
 		x += 106
 		place(u.batchRun, x, y, 100, 24, g)
+		x += 106
+		place(u.batchEdit, x, y, 110, 24, g)
 	}
 	m := state.page == 1
 	for i, c := range u.layers {
@@ -1423,6 +1430,7 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.sessionOpen, displayX+736, 78, 78, 27, true)
 		place(u.batchPlan, displayX+820, 78, 118, 27, true)
 		place(u.batchRun, displayX+944, 78, 118, 27, true)
+		place(u.batchEdit, displayX+1068, 78, 126, 27, true)
 	}
 }
 func prestackSceneRect() RECT {
@@ -4586,6 +4594,10 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			if code == 0 || code == 1 {
 				runPrestackBatchPlanFromDialog()
 			}
+		case IDPRESTACK_BATCH_EDIT:
+			if code == 0 || code == 1 {
+				openPrestackBatchEditor()
+			}
 		case IDPRESTACK_COMPARE_OPEN_B:
 			if code == 0 || code == 1 {
 				if path := openDialog(h); path != "" {
@@ -5028,6 +5040,13 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case WM_DESTROY:
+		if prestackBatchEditorWindow != nil && prestackBatchEditorWindow.hwnd != 0 {
+			// The editor is metadata-only, but it is owned by this workspace
+			// window. Close it before clearing the owner token so it cannot keep
+			// stale plan state alive after the workspace is destroyed.
+			pDestroyWindow.Call(prestackBatchEditorWindow.hwnd)
+			prestackBatchEditorWindow = nil
+		}
 		cancelPrestackJobs()
 		prestackDeliveryMu.Lock()
 		prestackDeliveryHwnd = 0

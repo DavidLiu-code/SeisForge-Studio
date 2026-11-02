@@ -34,6 +34,16 @@ err = editor.Save(path, overwrite)
 
 `Plan()`、`Tasks()` 和编辑器内部均使用防御性副本。任何失败的路径、格式或重复目标更新都不会部分修改当前计划。
 
-## 后续 UI 阶段
+## 原生 Win32 编辑窗口
 
-下一步在叠前 Gather/Compare 工具栏加入原生 Win32 编辑窗口，提供任务列表、输出目录、格式和删除/排序操作。UI 将复用上述核心 API，保持单行工具栏和现有异步执行生命周期不变。
+叠前 Gather 和 Compare 工具栏现在提供“编辑批处理计划”入口。打开计划后，独立窗口只持有
+`PlanEditor` 的元数据副本，并提供：
+
+- Figure/QC 任务列表（固定 Figure → QC 分组）；
+- 同类型任务上移、下移和删除；
+- 输出目录重映射；
+- Figure PNG/result 文件名和 QC JSON/CSV 文件名、格式修改；
+- “另存为”保存新计划，拒绝覆盖原计划或已有目标。
+
+保存后编辑器会重新加载计划并执行 `Validate`。取消或关闭窗口会丢弃全部未保存修改，不打开
+Reader、不读取 SEG-Y，也不改变当前 Gather/Compare 工作区。

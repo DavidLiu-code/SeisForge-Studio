@@ -62,7 +62,10 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 			// but the batch-plan action is still part of the row. Keep enough
 			// virtual width for every control so narrow-window scrolling can
 			// expose the complete toolbar without clipping the last button.
-			controlWidth = 1170
+			// The pre-B row now also contains the batch-plan editor action. Keep
+			// enough virtual width for all three batch buttons so the editor stays
+			// reachable on narrow windows without adding a third toolbar row.
+			controlWidth = 1300
 		}
 	case 4:
 		controlWidth = 160

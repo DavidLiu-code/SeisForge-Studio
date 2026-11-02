@@ -169,3 +169,89 @@ func TestPlanEditorRejectsDuplicateOutputWithoutMutation(t *testing.T) {
 		t.Fatalf("failed QC update mutated plan: before=%+v after=%+v", before.QCReports[0], after.QCReports[0])
 	}
 }
+
+func TestPlanEditorSaveRoundTripPreservesTasksAndSources(t *testing.T) {
+	p := editorFixture(t)
+	original := p.Clone()
+	editor, err := NewEditor(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.Move(TaskRef{Kind: JobFigure, ID: "figure-002"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.SetOutputDirectory(filepath.Join(t.TempDir(), "edited-out")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "edited-plan.json")
+	if err := editor.Save(path, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(loaded); err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Figures) != len(original.Figures) || len(loaded.QCReports) != len(original.QCReports) {
+		t.Fatalf("round-trip task counts changed: got figures=%d qc=%d", len(loaded.Figures), len(loaded.QCReports))
+	}
+	if loaded.Figures[0].SourceA != original.Figures[1].SourceA || loaded.Figures[1].SourceA != original.Figures[0].SourceA {
+		t.Fatalf("source identity/order changed unexpectedly: %+v", loaded.Figures)
+	}
+	if loaded.QCReports[0].Source != original.QCReports[0].Source {
+		t.Fatalf("QC source identity changed: got=%+v want=%+v", loaded.QCReports[0].Source, original.QCReports[0].Source)
+	}
+	if filepath.Dir(loaded.Figures[0].Output) != loaded.OutputDirectory || filepath.Dir(loaded.QCReports[0].Output) != loaded.OutputDirectory {
+		t.Fatalf("outputs were not remapped under output directory: %+v", loaded)
+	}
+	// Saving an edited copy must not mutate the caller's plan or source identity.
+	if original.Figures[0].SourceA != p.Figures[0].SourceA || original.QCReports[0].Source != p.QCReports[0].Source {
+		t.Fatal("source identity mutated while editing")
+	}
+}
+
+func TestPlanEditorInvalidMutationsAreAtomic(t *testing.T) {
+	editor, err := NewEditor(editorFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := editor.Plan()
+	if err := editor.Move(TaskRef{Kind: JobFigure, ID: "figure-001"}, 99); err == nil {
+		t.Fatal("expected out-of-range move rejection")
+	}
+	if err := editor.Move(TaskRef{Kind: JobQC, ID: "missing"}, 0); err == nil {
+		t.Fatal("expected missing task rejection")
+	}
+	if err := editor.UpdateQCOutput(TaskRef{Kind: JobQC, ID: "qc-001"}, "valid.json", ReportFormat("xml")); err == nil {
+		t.Fatal("expected invalid report format rejection")
+	}
+	after := editor.Plan()
+	beforeJSON, _ := json.Marshal(before)
+	afterJSON, _ := json.Marshal(after)
+	if string(beforeJSON) != string(afterJSON) {
+		t.Fatalf("failed mutations changed plan: before=%s after=%s", beforeJSON, afterJSON)
+	}
+}
+
+func TestPlanEditorTaskGroupsRemainFigureThenQC(t *testing.T) {
+	editor, err := NewEditor(editorFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.Move(TaskRef{Kind: JobQC, ID: "qc-001"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	tasks := editor.Tasks()
+	if len(tasks) != 3 || tasks[0].Ref.Kind != JobFigure || tasks[1].Ref.Kind != JobFigure || tasks[2].Ref.Kind != JobQC {
+		t.Fatalf("editor exposed cross-kind ordering: %+v", tasks)
+	}
+	if err := editor.Remove(TaskRef{Kind: JobFigure, ID: "figure-001"}); err != nil {
+		t.Fatal(err)
+	}
+	tasks = editor.Tasks()
+	if len(tasks) != 2 || tasks[0].Ref.ID != "figure-001" || tasks[1].Ref.ID != "qc-001" {
+		t.Fatalf("IDs were not deterministically regenerated: %+v", tasks)
+	}
+}
