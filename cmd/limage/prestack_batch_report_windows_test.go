@@ -34,3 +34,30 @@ func TestFormatPrestackExecutionReportShowsMetadataOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionReportTaskFiltersAndOutputDirectory(t *testing.T) {
+	report := prestackbatch.ExecutionReport{
+		PlanPath: `C:\tmp\run.json`,
+		Tasks: []prestackbatch.ExecutionTaskReport{
+			{ID: "ok", Kind: prestackbatch.JobFigure, Status: prestackbatch.ExecutionSucceeded, Output: `C:\out\ok.png`, Result: `C:\out\ok.result.json`},
+			{ID: "bad", Kind: prestackbatch.JobQC, Status: prestackbatch.ExecutionFailed, Output: `C:\out\bad.json`},
+			{ID: "waiting", Kind: prestackbatch.JobQC, Status: prestackbatch.ExecutionPending, Output: `C:\out\waiting.json`},
+		},
+	}
+	if !executionReportTaskMatchesFilter(report.Tasks[1], executionReportFilterProblems) {
+		t.Fatal("failed task was not selected by the problems filter")
+	}
+	if executionReportTaskMatchesFilter(report.Tasks[0], executionReportFilterProblems) {
+		t.Fatal("successful task was selected by the problems filter")
+	}
+	if !executionReportTaskMatchesFilter(report.Tasks[2], executionReportFilterIncomplete) {
+		t.Fatal("pending task was not selected by the incomplete filter")
+	}
+	filtered := formatPrestackExecutionReportFiltered(`C:\tmp\run.execution.json`, report, executionReportFilterProblems)
+	if !strings.Contains(filtered, "bad") || strings.Contains(filtered, "waiting") || strings.Contains(filtered, "ok") {
+		t.Fatalf("unexpected filtered report: %s", filtered)
+	}
+	if got := executionReportOutputDirectory(report); got != `C:\out` {
+		t.Fatalf("unexpected output directory %q", got)
+	}
+}

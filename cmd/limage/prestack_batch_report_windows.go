@@ -19,10 +19,20 @@ import (
 const (
 	prestackExecutionReportClass = "Limage64PrestackExecutionReport"
 
-	prestackExecutionReportEditID   = 1
-	prestackExecutionReportPathID   = 2
-	prestackExecutionReportStatusID = 3
-	prestackExecutionReportCloseID  = 4
+	prestackExecutionReportEditID    = 1
+	prestackExecutionReportPathID    = 2
+	prestackExecutionReportStatusID  = 3
+	prestackExecutionReportCloseID   = 4
+	prestackExecutionReportFilterID  = 5
+	prestackExecutionReportCopyID    = 6
+	prestackExecutionReportOpenDirID = 7
+)
+
+const (
+	executionReportFilterAll = iota
+	executionReportFilterProblems
+	executionReportFilterSucceeded
+	executionReportFilterIncomplete
 )
 
 type prestackExecutionReportWindowState struct {
@@ -33,6 +43,10 @@ type prestackExecutionReportWindowState struct {
 	statusLabel uintptr
 	edit        uintptr
 	close       uintptr
+	filter      uintptr
+	copyPath    uintptr
+	openDir     uintptr
+	filterIndex int
 }
 
 var prestackExecutionReportWindow *prestackExecutionReportWindowState
@@ -117,11 +131,42 @@ func executionReportStatusLabel(status prestackbatch.ExecutionStatus) string {
 	return string(status)
 }
 
+func executionReportTaskMatchesFilter(task prestackbatch.ExecutionTaskReport, filter int) bool {
+	switch filter {
+	case executionReportFilterProblems:
+		return task.Status == prestackbatch.ExecutionFailed || task.Status == prestackbatch.ExecutionCanceled
+	case executionReportFilterSucceeded:
+		return task.Status == prestackbatch.ExecutionSucceeded
+	case executionReportFilterIncomplete:
+		return task.Status == prestackbatch.ExecutionPending || task.Status == prestackbatch.ExecutionRunning || task.Status == prestackbatch.ExecutionSkipped
+	default:
+		return true
+	}
+}
+
+func executionReportOutputDirectory(report prestackbatch.ExecutionReport) string {
+	for _, task := range report.Tasks {
+		for _, output := range []string{task.Output, task.Result} {
+			if strings.TrimSpace(output) != "" {
+				return filepath.Dir(filepath.Clean(output))
+			}
+		}
+	}
+	if strings.TrimSpace(report.PlanPath) != "" {
+		return filepath.Dir(filepath.Clean(report.PlanPath))
+	}
+	return ""
+}
+
 // formatPrestackExecutionReport is kept separate from the window procedure so
 // the report text remains deterministic and can be covered without creating a
 // Win32 window.  Only report metadata is rendered; no samples or amplitudes
 // are present in ExecutionReport by design.
 func formatPrestackExecutionReport(path string, report prestackbatch.ExecutionReport) string {
+	return formatPrestackExecutionReportFiltered(path, report, executionReportFilterAll)
+}
+
+func formatPrestackExecutionReportFiltered(path string, report prestackbatch.ExecutionReport, filter int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "叠前批处理执行报告\r\n")
 	fmt.Fprintf(&b, "报告文件：%s\r\n", filepath.Clean(path))
@@ -141,11 +186,22 @@ func formatPrestackExecutionReport(path string, report prestackbatch.ExecutionRe
 		fmt.Fprintf(&b, "执行错误：%s\r\n", report.Error)
 	}
 	fmt.Fprintf(&b, "\r\n任务（按 Figure → QC 顺序）：\r\n")
-	if len(report.Tasks) == 0 {
+	visible := 0
+	for _, task := range report.Tasks {
+		if executionReportTaskMatchesFilter(task, filter) {
+			visible++
+		}
+	}
+	if visible == 0 {
 		b.WriteString("（没有任务）\r\n")
 	}
-	for i, task := range report.Tasks {
-		fmt.Fprintf(&b, "[%d] %s  %s  状态：%s\r\n", i+1, executionReportKindLabel(task.Kind), task.ID, executionReportStatusLabel(task.Status))
+	ordinal := 0
+	for _, task := range report.Tasks {
+		if !executionReportTaskMatchesFilter(task, filter) {
+			continue
+		}
+		ordinal++
+		fmt.Fprintf(&b, "[%d] %s  %s  状态：%s\r\n", ordinal, executionReportKindLabel(task.Kind), task.ID, executionReportStatusLabel(task.Status))
 		fmt.Fprintf(&b, "    输出：%s\r\n", task.Output)
 		if task.Result != "" {
 			fmt.Fprintf(&b, "    结果：%s\r\n", task.Result)
@@ -163,6 +219,61 @@ func formatPrestackExecutionReport(path string, report prestackbatch.ExecutionRe
 	return b.String()
 }
 
+func reportFilterLabel(filter int) string {
+	switch filter {
+	case executionReportFilterProblems:
+		return "失败/取消"
+	case executionReportFilterSucceeded:
+		return "仅成功"
+	case executionReportFilterIncomplete:
+		return "未完成"
+	default:
+		return "全部任务"
+	}
+}
+
+func copyPrestackReportPath(owner uintptr, path string) error {
+	utf16Text, err := syscall.UTF16FromString(path)
+	if err != nil || len(utf16Text) == 0 {
+		return fmt.Errorf("报告路径为空")
+	}
+	opened, _, _ := traceClipboardOpen.Call(owner)
+	if opened == 0 {
+		return fmt.Errorf("无法打开剪贴板")
+	}
+	defer traceClipboardClose.Call()
+	traceClipboardEmpty.Call()
+	hMemory, _, _ := traceGlobalAlloc.Call(traceGMEMMoveable, uintptr(len(utf16Text)*2))
+	if hMemory == 0 {
+		return fmt.Errorf("无法分配剪贴板内存")
+	}
+	pointer, _, _ := traceGlobalLock.Call(hMemory)
+	if pointer == 0 {
+		traceGlobalFree.Call(hMemory)
+		return fmt.Errorf("无法锁定剪贴板内存")
+	}
+	copy(unsafe.Slice((*uint16)(unsafe.Pointer(pointer)), len(utf16Text)), utf16Text)
+	traceGlobalUnlock.Call(hMemory)
+	accepted, _, _ := traceClipboardSet.Call(traceCFUnicodeText, hMemory)
+	if accepted == 0 {
+		traceGlobalFree.Call(hMemory)
+		return fmt.Errorf("无法写入剪贴板")
+	}
+	return nil
+}
+
+func openPrestackReportOutputDirectory(owner uintptr, report prestackbatch.ExecutionReport) error {
+	directory := executionReportOutputDirectory(report)
+	if directory == "" {
+		return fmt.Errorf("报告没有可用的输出目录")
+	}
+	r, _, _ := pShellExecuteW.Call(owner, uintptr(unsafe.Pointer(u16("open"))), uintptr(unsafe.Pointer(u16(directory))), 0, 0, SW_SHOW)
+	if r <= 32 {
+		return fmt.Errorf("无法打开输出目录：%s", directory)
+	}
+	return nil
+}
+
 func prestackExecutionReportWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	state := prestackExecutionReportWindow
 	switch msg {
@@ -171,8 +282,15 @@ func prestackExecutionReportWndProc(h uintptr, msg uint32, wParam, lParam uintpt
 			return 0
 		}
 		state.hwnd = h
-		state.pathLabel = createCtrl(h, "STATIC", "", WS_CHILD|WS_VISIBLE, 12, 10, 820, 22, prestackExecutionReportPathID)
-		state.edit = createCtrl(h, "EDIT", "", WS_CHILD|WS_VISIBLE|WS_BORDER|WS_VSCROLL|WS_HSCROLL|traceESMultiline|traceESAutoVScroll|ES_AUTOHSCROLL|ES_READONLY, 12, 38, 820, 480, prestackExecutionReportEditID)
+		state.filter = createCtrl(h, "COMBOBOX", "", WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST|CBS_HASSTRINGS, 82, 8, 120, 180, prestackExecutionReportFilterID)
+		for _, label := range []string{"全部任务", "失败/取消", "仅成功", "未完成"} {
+			pSendMessageW.Call(state.filter, CB_ADDSTRING, 0, uintptr(unsafe.Pointer(u16(label))))
+		}
+		pSendMessageW.Call(state.filter, CB_SETCURSEL, 0, 0)
+		state.copyPath = createCtrl(h, "BUTTON", "复制报告路径", WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON, 212, 8, 108, 26, prestackExecutionReportCopyID)
+		state.openDir = createCtrl(h, "BUTTON", "打开输出目录", WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON, 326, 8, 108, 26, prestackExecutionReportOpenDirID)
+		state.pathLabel = createCtrl(h, "STATIC", "", WS_CHILD|WS_VISIBLE, 446, 10, 390, 22, prestackExecutionReportPathID)
+		state.edit = createCtrl(h, "EDIT", "", WS_CHILD|WS_VISIBLE|WS_BORDER|WS_VSCROLL|WS_HSCROLL|traceESMultiline|traceESAutoVScroll|ES_AUTOHSCROLL|ES_READONLY, 12, 42, 820, 476, prestackExecutionReportEditID)
 		state.statusLabel = createCtrl(h, "STATIC", "只读元数据；报告不包含振幅或样点数组。", WS_CHILD|WS_VISIBLE|WS_BORDER, 12, 526, 720, 24, prestackExecutionReportStatusID)
 		state.close = createCtrl(h, "BUTTON", "关闭", WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON, 744, 524, 88, 26, prestackExecutionReportCloseID)
 		setText(state.pathLabel, "报告："+state.path)
@@ -192,8 +310,35 @@ func prestackExecutionReportWndProc(h uintptr, msg uint32, wParam, lParam uintpt
 		}
 		return 0
 	case WM_COMMAND:
-		if int(wParam&0xffff) == prestackExecutionReportCloseID {
+		id := int(wParam & 0xffff)
+		code := int((wParam >> 16) & 0xffff)
+		switch id {
+		case prestackExecutionReportCloseID:
 			pDestroyWindow.Call(h)
+			return 0
+		case prestackExecutionReportFilterID:
+			if code == 1 && state != nil {
+				selected, _, _ := pSendMessageW.Call(state.filter, CB_GETCURSEL, 0, 0)
+				state.filterIndex = int(selected)
+				setText(state.edit, formatPrestackExecutionReportFiltered(state.path, state.report, state.filterIndex))
+				setText(state.statusLabel, fmt.Sprintf("只读元数据；当前筛选：%s；报告不包含振幅或样点数组。", reportFilterLabel(state.filterIndex)))
+			}
+			return 0
+		case prestackExecutionReportCopyID:
+			if state != nil {
+				if err := copyPrestackReportPath(h, state.path); err != nil {
+					message(h, "复制报告路径", err.Error(), MB_OK|MB_ICONERROR)
+				} else {
+					setText(state.statusLabel, "报告路径已复制；报告不包含振幅或样点数组。")
+				}
+			}
+			return 0
+		case prestackExecutionReportOpenDirID:
+			if state != nil {
+				if err := openPrestackReportOutputDirectory(h, state.report); err != nil {
+					message(h, "打开输出目录", err.Error(), MB_OK|MB_ICONERROR)
+				}
+			}
 			return 0
 		}
 	case WM_CLOSE:
@@ -214,9 +359,10 @@ func prestackExecutionReportLayout(state *prestackExecutionReportWindowState, wi
 		return
 	}
 	margin := 12
-	pathH := 22
+	pathH := 26
 	bottomH := 26
-	editH := height - margin*2 - pathH - bottomH - 12
+	editTop := 42
+	editH := height - editTop - margin - bottomH - 12
 	if editH < 80 {
 		editH = 80
 	}
@@ -224,9 +370,28 @@ func prestackExecutionReportLayout(state *prestackExecutionReportWindowState, wi
 	if editW < 120 {
 		editW = 120
 	}
-	pMoveWindow.Call(state.pathLabel, uintptr(margin), uintptr(margin), uintptr(editW), uintptr(pathH), 1)
-	pMoveWindow.Call(state.edit, uintptr(margin), uintptr(margin+pathH+6), uintptr(editW), uintptr(editH), 1)
-	bottomY := margin + pathH + 6 + editH + 8
+	filterW := 120
+	copyW := 108
+	openW := 108
+	pathX := margin + 434
+	pathY := margin
+	if pathX > width-180 {
+		// On the minimum report-window width the path moves below the action
+		// row instead of overlapping the filter and path buttons.
+		pathX = margin
+		pathY = 34
+		editTop = 58
+		editH = height - editTop - margin - bottomH - 12
+		if editH < 80 {
+			editH = 80
+		}
+	}
+	pMoveWindow.Call(state.filter, uintptr(margin+70), 8, uintptr(filterW), 24, 1)
+	pMoveWindow.Call(state.copyPath, uintptr(margin+200), 8, uintptr(copyW), 26, 1)
+	pMoveWindow.Call(state.openDir, uintptr(margin+314), 8, uintptr(openW), 26, 1)
+	pMoveWindow.Call(state.pathLabel, uintptr(pathX), uintptr(pathY), uintptr(maxInt(editW-(pathX-margin), 120)), uintptr(pathH), 1)
+	pMoveWindow.Call(state.edit, uintptr(margin), uintptr(editTop), uintptr(editW), uintptr(editH), 1)
+	bottomY := editTop + editH + 8
 	statusW := editW - 100
 	if statusW < 120 {
 		statusW = editW
