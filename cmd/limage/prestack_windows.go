@@ -90,6 +90,7 @@ const (
 	IDPRESTACK_BATCH_PLAN
 	IDPRESTACK_BATCH_RUN
 	IDPRESTACK_BATCH_EDIT
+	IDPRESTACK_BATCH_REPORT
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -141,7 +142,7 @@ type prestackControls struct {
 	qcExport, exportGather, exportCSV                                                                uintptr
 	figureExport                                                                                     uintptr
 	sessionSave, sessionOpen                                                                         uintptr
-	batchPlan, batchRun, batchEdit                                                                   uintptr
+	batchPlan, batchRun, batchEdit, batchReport                                                      uintptr
 	compareOpenB, compareCloseB, compareExport                                                       uintptr
 	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly               uintptr
 	compareFilterAmbiguous, compareFilterInvalid                                                     uintptr
@@ -678,6 +679,7 @@ func createPrestackControls() {
 	u.batchPlan = prestackButton(IDPRESTACK_BATCH_PLAN, "保存批处理计划")
 	u.batchRun = prestackButton(IDPRESTACK_BATCH_RUN, "执行批处理计划")
 	u.batchEdit = prestackButton(IDPRESTACK_BATCH_EDIT, "编辑批处理计划")
+	u.batchReport = prestackButton(IDPRESTACK_BATCH_REPORT, "查看执行报告")
 	u.compareOpenB = prestackButton(IDPRESTACK_COMPARE_OPEN_B, "加载 B")
 	u.compareCloseB = prestackButton(IDPRESTACK_COMPARE_CLOSE_B, "关闭 B")
 	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出匹配报告")
@@ -1115,7 +1117,23 @@ func layoutPrestackControls() {
 // not a second approximation of toolbar bounds. The callback clips controls
 // to the real client; only page controls translate in the virtual viewport.
 func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestackSession, place func(uintptr, int, int, int, int, bool)) {
-	prestackControlsLayoutForViewport(w, h, prestackToolbarViewportForSize(w, state.page).CanvasWidth, u, state, place)
+	baseCanvas := prestackToolbarViewportForSize(w, state.page).CanvasWidth
+	canvas := baseCanvas
+	clientWidth := w
+	if state != nil {
+		stateCanvas := prestackToolbarViewportForState(w, state.page, state).CanvasWidth
+		if stateCanvas > canvas {
+			canvas = stateCanvas
+		}
+		// Callers that pass the full virtual canvas (as the UI-free layout
+		// tests do) should not gain an artificial scrollbar row merely because
+		// the selected Compare state has a wider toolbar. Narrow callers still
+		// use the real client width and retain the scrollbar offset.
+		if w >= baseCanvas {
+			clientWidth = canvas
+		}
+	}
+	prestackControlsLayoutForViewport(clientWidth, h, canvas, u, state, place)
 }
 
 // prestackControlsLayoutForViewport lays out controls in a virtual toolbar
@@ -1178,6 +1196,7 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 	place(u.batchPlan, 0, 0, 1, 1, false)
 	place(u.batchRun, 0, 0, 1, 1, false)
 	place(u.batchEdit, 0, 0, 1, 1, false)
+	place(u.batchReport, 0, 0, 1, 1, false)
 	x, y := 10, 76
 	// Raw file-order mode uses the same two-row toolbar as the other gather
 	// modes.  Keep the range controls on row one and the common display
@@ -1251,6 +1270,8 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.batchRun, x, y, 100, 24, true)
 		x += 106
 		place(u.batchEdit, x, y, 110, 24, true)
+		x += 116
+		place(u.batchReport, x, y, 110, 24, true)
 	} else {
 		// Keep keyed gathers on the same deliberate two-row grid.  The old
 		// wrapping loop counted hidden raw controls when calculating x, which
@@ -1352,6 +1373,8 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.batchRun, x, y, 100, 24, g)
 		x += 106
 		place(u.batchEdit, x, y, 110, 24, g)
+		x += 116
+		place(u.batchReport, x, y, 110, 24, g)
 	}
 	m := state.page == 1
 	for i, c := range u.layers {
@@ -1431,6 +1454,14 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.batchPlan, displayX+820, 78, 118, 27, true)
 		place(u.batchRun, displayX+944, 78, 118, 27, true)
 		place(u.batchEdit, displayX+1068, 78, 126, 27, true)
+		reportX := displayX + 1200
+		if !compareBReady && !state.compareBLoading {
+			// The pre-B row has no filter group. Keep the report action inside
+			// the compact 1400px virtual canvas so it remains reachable by the
+			// existing toolbar scrollbar without adding another row.
+			reportX = displayX + 1174
+		}
+		place(u.batchReport, reportX, 78, 126, 27, true)
 	}
 }
 func prestackSceneRect() RECT {
@@ -4598,6 +4629,10 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			if code == 0 || code == 1 {
 				openPrestackBatchEditor()
 			}
+		case IDPRESTACK_BATCH_REPORT:
+			if code == 0 || code == 1 {
+				openPrestackExecutionReportViewer()
+			}
 		case IDPRESTACK_COMPARE_OPEN_B:
 			if code == 0 || code == 1 {
 				if path := openDialog(h); path != "" {
@@ -5046,6 +5081,13 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			// stale plan state alive after the workspace is destroyed.
 			pDestroyWindow.Call(prestackBatchEditorWindow.hwnd)
 			prestackBatchEditorWindow = nil
+		}
+		if prestackExecutionReportWindow != nil && prestackExecutionReportWindow.hwnd != 0 {
+			// The report viewer is also metadata-only and owned by this workspace.
+			// Destroy it before clearing the workspace delivery state so a report
+			// window cannot outlive the Gather/Compare owner with stale metadata.
+			pDestroyWindow.Call(prestackExecutionReportWindow.hwnd)
+			prestackExecutionReportWindow = nil
 		}
 		cancelPrestackJobs()
 		prestackDeliveryMu.Lock()

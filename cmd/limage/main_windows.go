@@ -1939,6 +1939,7 @@ func main() {
 	registerClass("Limage64TraceAnalysis", syscall.NewCallback(traceAnalysisWndProc), COLOR_WINDOW+1, hinst, cursor)
 	registerClass("Limage64License", syscall.NewCallback(licenseWndProc), COLOR_BTNFACE+1, hinst, cursor)
 	registerClass("Limage64PrestackBatchEditor", syscall.NewCallback(prestackBatchEditorWndProc), COLOR_BTNFACE+1, hinst, cursor)
+	registerClass("Limage64PrestackExecutionReport", syscall.NewCallback(prestackExecutionReportWndProc), COLOR_BTNFACE+1, hinst, cursor)
 	if !ensureActivated(hinst) {
 		return
 	}

@@ -47,6 +47,14 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 	width = maxLayoutInt(1, width)
 	controlWidth := 1440 // compact Gather/Raw toolbars, including batch controls
 	switch page {
+	case 0:
+		if state != nil {
+			// The state-aware Gather row includes the report viewer action at
+			// the far right. Keep enough virtual width for it at 100% and
+			// scaled DPI while preserving the legacy size-only contract used
+			// by callers that do not have a session state yet.
+			controlWidth = 1680
+		}
 	case 1:
 		controlWidth = 670
 	case 2:
@@ -57,15 +65,20 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 		// can expose the complete row without shrinking the controls to unreadable
 		// sizes.
 		controlWidth = 1400
-		if state != nil && state.compareBDataset == nil && !state.compareBLoading {
+		if state != nil && state.compareBDataset != nil {
+			controlWidth = 1906
+		} else if state != nil && state.compareBDataset == nil && !state.compareBLoading {
 			// Before B is loaded the filters and close/export controls are hidden,
 			// but the batch-plan action is still part of the row. Keep enough
 			// virtual width for every control so narrow-window scrolling can
 			// expose the complete toolbar without clipping the last button.
 			// The pre-B row now also contains the batch-plan editor action. Keep
-			// enough virtual width for all three batch buttons so the editor stays
-			// reachable on narrow windows without adding a third toolbar row.
-			controlWidth = 1300
+			// enough virtual width for the batch plan, editor and report buttons
+			// so the report viewer stays reachable on narrow windows without
+			// adding a third toolbar row.
+			controlWidth = 1400
+		} else if state != nil && state.compareBLoading {
+			controlWidth = 1510
 		}
 	case 4:
 		controlWidth = 160
