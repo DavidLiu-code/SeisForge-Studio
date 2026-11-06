@@ -1888,15 +1888,10 @@ func applyPseudoProjectMultiplierToReadyLines(multiplier float64) {
 }
 
 func pseudoPalette(index int) [256]pseudo3dcore.Color {
-	if index < 0 || index >= len(legacyAnchors) {
-		index = 2
-	}
-	anchors := legacyAnchors[index]
-	start, middle, end := tcolor(anchors[2]), tcolor(anchors[1]), tcolor(anchors[0])
+	colors := paletteRGB(index)
 	var palette [256]pseudo3dcore.Color
-	for i := 0; i < 128; i++ {
-		palette[i] = pseudo3dcore.Color{R: lerp(start.r, middle.r, i), G: lerp(start.g, middle.g, i), B: lerp(start.b, middle.b, i)}
-		palette[128+i] = pseudo3dcore.Color{R: lerp(middle.r, end.r, i), G: lerp(middle.g, end.g, i), B: lerp(middle.b, end.b, i)}
+	for i, color := range colors {
+		palette[i] = pseudo3dcore.Color{R: color.r, G: color.g, B: color.b}
 	}
 	return palette
 }

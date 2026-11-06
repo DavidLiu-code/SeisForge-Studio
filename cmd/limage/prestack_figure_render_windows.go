@@ -230,7 +230,7 @@ func (p prestackFigurePayload) validate() error {
 		(o.DisplayMode != segy.DisplayAdaptive && o.DisplayMode != segy.DisplayNearest) {
 		return errors.New("unsupported figure renderer options")
 	}
-	if p.Palette < 0 || p.Palette >= len(legacyAnchors) || p.PaletteRGB != prestackFigurePalette(p.Palette) {
+	if !paletteIndexValid(p.Palette) || p.PaletteRGB != prestackFigurePalette(p.Palette) {
 		return errors.New("figure palette is unsupported by this renderer")
 	}
 	if p.SourceAMetadata.SampleIntervalUS <= 0 || p.SourceAMetadata.TraceCount <= 0 || p.SourceAMetadata.SamplesPerTrace <= 0 {

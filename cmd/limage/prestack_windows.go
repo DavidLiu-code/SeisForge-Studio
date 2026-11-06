@@ -73,6 +73,7 @@ const (
 	IDPRESTACK_COMPARE_OPEN_B
 	IDPRESTACK_COMPARE_CLOSE_B
 	IDPRESTACK_COMPARE_EXPORT
+	IDPRESTACK_COMPARE_DELTA
 	IDPRESTACK_MAPPING_TARGET
 	IDPRESTACK_COMPARE_FILTER_MATCHED
 	IDPRESTACK_COMPARE_FILTER_AONLY
@@ -91,6 +92,8 @@ const (
 	IDPRESTACK_BATCH_RUN
 	IDPRESTACK_BATCH_EDIT
 	IDPRESTACK_BATCH_REPORT
+	IDPRESTACK_RANGE_WINDOW
+	IDPRESTACK_TOOLS_WINDOW
 	IDPRESTACK_MAPBYTE          = 8200
 	WM_PRESTACK_READY           = WM_USER + 610
 	WM_PRESTACK_PROGRESS        = WM_USER + 611
@@ -143,7 +146,8 @@ type prestackControls struct {
 	figureExport                                                                                     uintptr
 	sessionSave, sessionOpen                                                                         uintptr
 	batchPlan, batchRun, batchEdit, batchReport                                                      uintptr
-	compareOpenB, compareCloseB, compareExport                                                       uintptr
+	rangeWindow, toolsWindow                                                                         uintptr
+	compareOpenB, compareCloseB, compareExport, compareDeltaToggle                                   uintptr
 	compareMappingTarget, compareFilterMatched, compareFilterAOnly, compareFilterBOnly               uintptr
 	compareFilterAmbiguous, compareFilterInvalid                                                     uintptr
 	compareRangeLabel, compareRangeLimit, compareRangeMin, compareRangeMax, compareRangeApply        uintptr
@@ -251,6 +255,11 @@ type prestackSession struct {
 	compareLimitMin, compareLimitMax              float64
 	compareRows, compareDisplayRows               []prestackcore.CompareLogicalRow
 	mappingTargetB                                bool
+	compareShowDelta                              bool
+	// compareShowDeltaSet distinguishes the zero value used by UI-free tests
+	// from an explicit user choice.  A freshly constructed session historically
+	// showed all three panels, so an unset value must retain that behavior.
+	compareShowDeltaSet bool
 }
 
 // Workers capture this identity on the UI thread and never read mutable
@@ -640,12 +649,12 @@ func createPrestackControls() {
 	u.multiLabel = createCtrl(prestackHwnd, "STATIC", "多道集", WS_CHILD, 0, 0, 52, 22, 0)
 	u.multiEdit = createCtrl(prestackHwnd, "EDIT", "", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 176, 24, 0)
 	u.multiApply = prestackButton(IDPRESTACK_MULTI_APPLY, "应用多道集")
-	u.rawTraceStartLabel = createCtrl(prestackHwnd, "STATIC", "起始道", WS_CHILD, 0, 0, 52, 22, 0)
+	u.rawTraceStartLabel = createCtrl(prestackHwnd, "STATIC", "道起", WS_CHILD, 0, 0, 38, 22, 0)
 	u.rawTraceStart = createCtrl(prestackHwnd, "EDIT", "1", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 78, 24, IDPRESTACK_RAW_TRACE_START)
-	u.rawTraceEndLabel = createCtrl(prestackHwnd, "STATIC", "结束道", WS_CHILD, 0, 0, 52, 22, 0)
+	u.rawTraceEndLabel = createCtrl(prestackHwnd, "STATIC", "道止", WS_CHILD, 0, 0, 38, 22, 0)
 	u.rawTraceEnd = createCtrl(prestackHwnd, "EDIT", "0", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 78, 24, IDPRESTACK_RAW_TRACE_END)
 	u.rawSampleMode = prestackCombo(IDPRESTACK_RAW_SAMPLE_MODE, []string{"完整记录", "样点范围", "毫秒范围"})
-	u.rawSampleStartLabel = createCtrl(prestackHwnd, "STATIC", "样点/毫秒起", WS_CHILD, 0, 0, 82, 22, 0)
+	u.rawSampleStartLabel = createCtrl(prestackHwnd, "STATIC", "时间起", WS_CHILD, 0, 0, 38, 22, 0)
 	u.rawSampleStart = createCtrl(prestackHwnd, "EDIT", "1", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 78, 24, IDPRESTACK_RAW_SAMPLE_START)
 	u.rawSampleEndLabel = createCtrl(prestackHwnd, "STATIC", "止", WS_CHILD, 0, 0, 20, 22, 0)
 	u.rawSampleEnd = createCtrl(prestackHwnd, "EDIT", "0", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 78, 24, IDPRESTACK_RAW_SAMPLE_END)
@@ -671,18 +680,21 @@ func createPrestackControls() {
 	u.mappingProfileApply = prestackButton(IDPRESTACK_MAPPING_PROFILE_APPLY, "应用 Profile")
 	u.mappingText = createCtrl(prestackHwnd, "EDIT", "", WS_CHILD|WS_BORDER|WS_VSCROLL|ES_READONLY|traceESMultiline|traceESAutoVScroll, 0, 0, 700, 300, 0)
 	u.qcExport = prestackButton(IDPRESTACK_QC_EXPORT, "导出 QC 报告")
-	u.exportGather = prestackButton(IDPRESTACK_EXPORT_GATHER, "导出道集")
+	u.exportGather = prestackButton(IDPRESTACK_EXPORT_GATHER, "导出集")
 	u.exportCSV = prestackButton(IDPRESTACK_EXPORT_CSV, "导出清单")
-	u.figureExport = prestackButton(IDPRESTACK_FIGURE_EXPORT, "生成绘图代码")
+	u.figureExport = prestackButton(IDPRESTACK_FIGURE_EXPORT, "绘图代码")
 	u.sessionSave = prestackButton(IDPRESTACK_SESSION_SAVE, "保存流程")
 	u.sessionOpen = prestackButton(IDPRESTACK_SESSION_OPEN, "打开流程")
-	u.batchPlan = prestackButton(IDPRESTACK_BATCH_PLAN, "保存批处理计划")
-	u.batchRun = prestackButton(IDPRESTACK_BATCH_RUN, "执行批处理计划")
-	u.batchEdit = prestackButton(IDPRESTACK_BATCH_EDIT, "编辑批处理计划")
-	u.batchReport = prestackButton(IDPRESTACK_BATCH_REPORT, "查看执行报告")
+	u.batchPlan = prestackButton(IDPRESTACK_BATCH_PLAN, "保存计划")
+	u.batchRun = prestackButton(IDPRESTACK_BATCH_RUN, "执行计划")
+	u.batchEdit = prestackButton(IDPRESTACK_BATCH_EDIT, "编辑计划")
+	u.batchReport = prestackButton(IDPRESTACK_BATCH_REPORT, "报告")
+	u.rangeWindow = prestackButton(IDPRESTACK_RANGE_WINDOW, "显示范围")
+	u.toolsWindow = prestackButton(IDPRESTACK_TOOLS_WINDOW, "导出与流程")
 	u.compareOpenB = prestackButton(IDPRESTACK_COMPARE_OPEN_B, "加载 B")
 	u.compareCloseB = prestackButton(IDPRESTACK_COMPARE_CLOSE_B, "关闭 B")
-	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出匹配报告")
+	u.compareExport = prestackButton(IDPRESTACK_COMPARE_EXPORT, "导出报告")
+	u.compareDeltaToggle = createCtrl(prestackHwnd, "BUTTON", "差", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 46, 24, IDPRESTACK_COMPARE_DELTA)
 	u.compareMappingTarget = prestackCombo(IDPRESTACK_MAPPING_TARGET, []string{"映射目标：A", "映射目标：B"})
 	u.compareFilterMatched = createCtrl(prestackHwnd, "BUTTON", "匹配", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 62, 24, IDPRESTACK_COMPARE_FILTER_MATCHED)
 	u.compareFilterAOnly = createCtrl(prestackHwnd, "BUTTON", "A-only", WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX, 0, 0, 62, 24, IDPRESTACK_COMPARE_FILTER_AONLY)
@@ -695,11 +707,14 @@ func createPrestackControls() {
 	u.compareRangeMax = createCtrl(prestackHwnd, "EDIT", "1", WS_CHILD|WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL, 0, 0, 72, 24, IDPRESTACK_COMPARE_RANGE_MAX)
 	u.compareRangeApply = prestackButton(IDPRESTACK_COMPARE_RANGE_APPLY, "应用范围")
 	prestackState.compareFilterMask = 1 | 2 // matched + A-only keep the A panel useful by default.
+	prestackState.compareShowDelta = true
+	prestackState.compareShowDeltaSet = true
 	for _, c := range []uintptr{u.compareFilterMatched, u.compareFilterAOnly, u.compareFilterBOnly, u.compareFilterAmbiguous, u.compareFilterInvalid} {
 		pSendMessageW.Call(c, BM_SETCHECK, 0, 0)
 	}
 	pSendMessageW.Call(u.compareFilterMatched, BM_SETCHECK, BST_CHECKED, 0)
 	pSendMessageW.Call(u.compareFilterAOnly, BM_SETCHECK, BST_CHECKED, 0)
+	pSendMessageW.Call(u.compareDeltaToggle, BM_SETCHECK, BST_CHECKED, 0)
 	pSendMessageW.Call(u.compareMappingTarget, CB_SETCURSEL, 0, 0)
 	configurePrestackKeyCombo()
 	for i, f := range prestackMappingFields(&prestackState.mapping) {
@@ -754,6 +769,9 @@ func resetPrestackControls() {
 	setText(prestackUI.compareRangeMin, "-1")
 	setText(prestackUI.compareRangeMax, "1")
 	prestackState.compareFilterMask = 1 | 2
+	prestackState.compareShowDelta = true
+	prestackState.compareShowDeltaSet = true
+	pSendMessageW.Call(prestackUI.compareDeltaToggle, BM_SETCHECK, BST_CHECKED, 0)
 	setText(prestackUI.multiEdit, "")
 	setText(prestackUI.offsetBin, formatPrestackOffsetBin(prestackState.offsetBinSize))
 	prestackState.cmpBinSize = 0
@@ -906,6 +924,26 @@ func setRawRangeControlDefaults() {
 	pSendMessageW.Call(prestackUI.rawSampleMode, CB_SETCURSEL, 0, 0)
 }
 
+// setPrestackGatherRangeControlDefaults keeps the explicit range widgets in
+// sync with whichever gather is currently selected.  The same widgets are
+// used for Raw and keyed gathers; keyed gathers interpret the trace endpoints
+// as logical columns inside the current gather rather than file trace IDs.
+func setPrestackGatherRangeControlDefaults() {
+	if prestackState.dataset == nil {
+		return
+	}
+	total := int64(prestackState.dataset.Metadata.TraceCount)
+	if prestackState.selection.Type != prestackcore.GatherRaw && len(prestackState.gather.TraceIndices) > 0 {
+		total = int64(len(prestackState.gather.TraceIndices))
+	}
+	setText(prestackUI.rawTraceStart, "1")
+	setText(prestackUI.rawTraceEnd, strconv.FormatInt(maxInt64(1, total), 10))
+	setText(prestackUI.rawSampleStart, "1")
+	setText(prestackUI.rawSampleEnd, strconv.Itoa(prestackState.dataset.Metadata.SamplesPerTrace))
+	prestackState.rawSampleModeValue = 0
+	pSendMessageW.Call(prestackUI.rawSampleMode, CB_SETCURSEL, 0, 0)
+}
+
 func parseRawInt(text string, fallback int64) (int64, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -916,6 +954,227 @@ func parseRawInt(text string, fallback int64) (int64, error) {
 		return 0, err
 	}
 	return v, nil
+}
+
+func clampInt64(v, lo, hi int64) int64 {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func prestackSampleRangeFromControls(ns int) (int, int, int, error) {
+	mode, _, _ := pSendMessageW.Call(prestackUI.rawSampleMode, CB_GETCURSEL, 0, 0)
+	modeValue := int(mode)
+	s0, s1 := 0, maxInt(0, ns-1)
+	if modeValue == 0 {
+		return s0, s1, modeValue, nil
+	}
+	v0, e0 := parseRawInt(getText(prestackUI.rawSampleStart), 1)
+	v1, e1 := parseRawInt(getText(prestackUI.rawSampleEnd), int64(ns))
+	if e0 != nil || e1 != nil {
+		return 0, 0, modeValue, errors.New("样点或毫秒范围必须是整数")
+	}
+	if modeValue == 2 {
+		step := float64(maxInt(1, prestackState.dataset.Metadata.SampleIntervalUS)) / 1000
+		v0 = int64(math.Round(float64(v0) / step))
+		v1 = int64(math.Round(float64(v1) / step))
+	}
+	if v0 > v1 {
+		v0, v1 = v1, v0
+	}
+	if modeValue == 1 {
+		v0--
+		v1--
+	}
+	s0 = clampInt(int(v0), 0, maxInt(0, ns-1))
+	s1 = clampInt(int(v1), 0, maxInt(0, ns-1))
+	if s0 > s1 {
+		s0, s1 = s1, s0
+	}
+	return s0, s1, modeValue, nil
+}
+
+// applyPrestackGatherDisplayRange applies only the current gather's logical
+// trace window and sample window. It deliberately does not replace the
+// selected CMP/Shot/Receiver/Offset gather with Raw order.
+func applyPrestackGatherDisplayRange() {
+	if prestackState.index == nil || prestackState.dataset == nil || len(prestackState.gather.TraceIndices) == 0 {
+		return
+	}
+	total := len(prestackState.gather.TraceIndices)
+	start, err := parseRawInt(getText(prestackUI.rawTraceStart), 1)
+	if err != nil {
+		message(prestackHwnd, "道集范围", "道起和道止必须是整数。", MB_OK|MB_ICONERROR)
+		return
+	}
+	end, err := parseRawInt(getText(prestackUI.rawTraceEnd), int64(total))
+	if err != nil {
+		message(prestackHwnd, "道集范围", "道起和道止必须是整数。", MB_OK|MB_ICONERROR)
+		return
+	}
+	if start < 1 {
+		start = 1
+	}
+	if end <= 0 {
+		end = int64(total)
+	}
+	if start > end {
+		start, end = end, start
+	}
+	start = clampInt64(start, 1, int64(total))
+	end = clampInt64(end, start, int64(total))
+	s0, s1, modeValue, err := prestackSampleRangeFromControls(prestackState.dataset.Metadata.SamplesPerTrace)
+	if err != nil {
+		message(prestackHwnd, "道集范围", err.Error(), MB_OK|MB_ICONERROR)
+		return
+	}
+	prestackState.viewFirst, prestackState.viewLast = int(start-1), int(end-1)
+	prestackState.sampleFirst, prestackState.sampleLast = s0, s1
+	prestackState.compareViewSampleFirst, prestackState.compareViewSampleLast = s0, s1
+	prestackState.rawSampleModeValue = modeValue
+	setText(prestackUI.rawTraceStart, strconv.FormatInt(start, 10))
+	setText(prestackUI.rawTraceEnd, strconv.FormatInt(end, 10))
+	if modeValue != 0 {
+		setText(prestackUI.rawSampleStart, strconv.Itoa(s0+1))
+		setText(prestackUI.rawSampleEnd, strconv.Itoa(s1+1))
+	}
+	cancelPrestackExport()
+	clearPrestackImage()
+	startPrestackRender()
+	if prestackState.compareBDataset != nil {
+		prestackState.compareViewFirst, prestackState.compareViewLast = prestackState.viewFirst, prestackState.viewLast
+		refreshPrestackCompareMatch()
+	}
+}
+
+// setPrestackCompareRangeControlDefaults mirrors the active Compare logical
+// window into the shared Gather range controls.  The controls are reused on
+// both pages so a user can set one time/trace window and compare the same
+// extent without translating pixel coordinates or physical trace numbers.
+func setPrestackCompareRangeControlDefaults() {
+	total := len(prestackState.compareRows)
+	if total == 0 {
+		total = len(prestackState.gather.TraceIndices)
+	}
+	if total < 1 && prestackState.dataset != nil {
+		total = int(prestackState.dataset.Metadata.TraceCount)
+	}
+	first, last := 0, maxInt(0, total-1)
+	if total > 0 && prestackState.compareViewLast >= prestackState.compareViewFirst {
+		first = clampInt(prestackState.compareViewFirst, 0, total-1)
+		last = clampInt(prestackState.compareViewLast, first, total-1)
+	}
+	setText(prestackUI.rawTraceStart, strconv.Itoa(first+1))
+	setText(prestackUI.rawTraceEnd, strconv.Itoa(last+1))
+	ns := 0
+	if prestackState.dataset != nil {
+		ns = prestackState.dataset.Metadata.SamplesPerTrace
+	}
+	if ns > 0 {
+		setText(prestackUI.rawSampleStart, strconv.Itoa(clampInt(prestackState.sampleFirst, 0, ns-1)+1))
+		setText(prestackUI.rawSampleEnd, strconv.Itoa(clampInt(prestackState.sampleLast, 0, ns-1)+1))
+	}
+	if prestackState.sampleFirst <= 0 && (ns <= 0 || prestackState.sampleLast >= ns-1) {
+		prestackState.rawSampleModeValue = 0
+		pSendMessageW.Call(prestackUI.rawSampleMode, CB_SETCURSEL, 0, 0)
+	} else {
+		prestackState.rawSampleModeValue = 1
+		pSendMessageW.Call(prestackUI.rawSampleMode, CB_SETCURSEL, 1, 0)
+	}
+}
+
+// syncPrestackRangeControlsFromState restores the exact logical window after
+// leaving Compare.  Unlike the selection-default helper, this must not expand
+// a deliberately narrowed trace or sample range back to the full gather.
+func syncPrestackRangeControlsFromState() {
+	total := len(prestackState.gather.TraceIndices)
+	if total <= 0 && prestackState.dataset != nil {
+		total = int(prestackState.dataset.Metadata.TraceCount)
+	}
+	if total > 0 {
+		first := clampInt(prestackState.viewFirst, 0, total-1)
+		last := clampInt(prestackState.viewLast, first, total-1)
+		setText(prestackUI.rawTraceStart, strconv.Itoa(first+1))
+		setText(prestackUI.rawTraceEnd, strconv.Itoa(last+1))
+	}
+	if prestackState.dataset == nil || prestackState.dataset.Metadata.SamplesPerTrace <= 0 {
+		return
+	}
+	ns := prestackState.dataset.Metadata.SamplesPerTrace
+	s0 := clampInt(prestackState.sampleFirst, 0, ns-1)
+	s1 := clampInt(prestackState.sampleLast, s0, ns-1)
+	setText(prestackUI.rawSampleStart, strconv.Itoa(s0+1))
+	setText(prestackUI.rawSampleEnd, strconv.Itoa(s1+1))
+	if s0 == 0 && s1 == ns-1 {
+		prestackState.rawSampleModeValue = 0
+		pSendMessageW.Call(prestackUI.rawSampleMode, CB_SETCURSEL, 0, 0)
+	} else {
+		prestackState.rawSampleModeValue = 1
+		pSendMessageW.Call(prestackUI.rawSampleMode, CB_SETCURSEL, 1, 0)
+	}
+}
+
+// applyPrestackCompareDisplayRange applies the same logical trace and sample
+// window used by Gather to the A/B/Δ Compare rows.  It never changes gather
+// membership or the matching order; it only changes the visible slice.
+func applyPrestackCompareDisplayRange() {
+	if prestackState.index == nil || prestackState.dataset == nil || prestackState.page != 3 {
+		return
+	}
+	total := len(prestackState.compareRows)
+	if total == 0 {
+		total = len(prestackState.gather.TraceIndices)
+	}
+	if total <= 0 {
+		return
+	}
+	start, err := parseRawInt(getText(prestackUI.rawTraceStart), 1)
+	if err != nil {
+		message(prestackHwnd, "Compare 道集范围", "道起和道止必须是整数。", MB_OK|MB_ICONERROR)
+		return
+	}
+	end, err := parseRawInt(getText(prestackUI.rawTraceEnd), int64(total))
+	if err != nil {
+		message(prestackHwnd, "Compare 道集范围", "道起和道止必须是整数。", MB_OK|MB_ICONERROR)
+		return
+	}
+	if start < 1 {
+		start = 1
+	}
+	if end <= 0 {
+		end = int64(total)
+	}
+	if start > end {
+		start, end = end, start
+	}
+	start = clampInt64(start, 1, int64(total))
+	end = clampInt64(end, start, int64(total))
+	s0, s1, modeValue, err := prestackSampleRangeFromControls(prestackState.dataset.Metadata.SamplesPerTrace)
+	if err != nil {
+		message(prestackHwnd, "Compare 道集范围", err.Error(), MB_OK|MB_ICONERROR)
+		return
+	}
+	prestackState.compareViewFirst, prestackState.compareViewLast = int(start-1), int(end-1)
+	prestackState.viewFirst, prestackState.viewLast = prestackState.compareViewFirst, prestackState.compareViewLast
+	prestackState.sampleFirst, prestackState.sampleLast = s0, s1
+	prestackState.compareViewSampleFirst, prestackState.compareViewSampleLast = s0, s1
+	prestackState.rawSampleModeValue = modeValue
+	setText(prestackUI.rawTraceStart, strconv.FormatInt(start, 10))
+	setText(prestackUI.rawTraceEnd, strconv.FormatInt(end, 10))
+	cancelPrestackExport()
+	clearPrestackCompareRender()
+	if prestackState.compareBDataset != nil && prestackState.compareBIndex != nil {
+		refreshPrestackCompareMatch()
+	} else {
+		startPrestackCompareRender()
+	}
 }
 
 func applyPrestackRawRange() {
@@ -997,6 +1256,8 @@ func applyPrestackRawRange() {
 	prestackState.keyIndex = 0
 	prestackState.viewFirst, prestackState.viewLast = 0, len(result.TraceIndices)-1
 	prestackState.sampleFirst, prestackState.sampleLast = s0, s1
+	prestackState.compareViewFirst, prestackState.compareViewLast = prestackState.viewFirst, prestackState.viewLast
+	prestackState.compareViewSampleFirst, prestackState.compareViewSampleLast = s0, s1
 	setText(prestackUI.rawTraceStart, strconv.FormatInt(start+1, 10))
 	setText(prestackUI.rawTraceEnd, strconv.FormatInt(end, 10))
 	if prestackState.rawSampleModeValue != 0 {
@@ -1005,10 +1266,29 @@ func applyPrestackRawRange() {
 	}
 	clearPrestackImage()
 	startPrestackRender()
+	if prestackState.compareBDataset != nil {
+		refreshPrestackCompareMatch()
+	}
 }
 func setPrestackPage(page int) {
 	oldPage := prestackState.page
 	if page != prestackState.page {
+		if oldPage == 0 && page == 3 {
+			// Carry the explicit Gather trace/sample window into Compare so the
+			// two views start from the same spatial and time extent.
+			prestackState.compareViewFirst, prestackState.compareViewLast = prestackState.viewFirst, prestackState.viewLast
+			prestackState.compareViewSampleFirst, prestackState.compareViewSampleLast = prestackState.sampleFirst, prestackState.sampleLast
+			setPrestackCompareRangeControlDefaults()
+		}
+		if oldPage == 3 && page == 0 {
+			// Return the Compare window to Gather when the user switches back.
+			if prestackState.compareViewLast >= prestackState.compareViewFirst {
+				prestackState.viewFirst, prestackState.viewLast = prestackState.compareViewFirst, prestackState.compareViewLast
+			}
+			setText(prestackUI.rawTraceStart, strconv.Itoa(prestackState.viewFirst+1))
+			setText(prestackUI.rawTraceEnd, strconv.Itoa(prestackState.viewLast+1))
+			syncPrestackRangeControlsFromState()
+		}
 		prestackClearLink()
 		prestackState.compareModeGeneration = atomic.AddInt64(&prestackGeneration, 1)
 		if oldPage == 3 && page != 3 {
@@ -1122,14 +1402,18 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 	clientWidth := w
 	if state != nil {
 		stateCanvas := prestackToolbarViewportForState(w, state.page, state).CanvasWidth
-		if stateCanvas > canvas {
+		// The size-only layout helper is also used by legacy UI-free tests with
+		// a synthetic Compare state. Keep that contract at the legacy 1400px
+		// canvas; the real native layout passes the state-aware viewport directly.
+		legacyCompare := state.page == 3 && w == baseCanvas
+		if stateCanvas > canvas && !legacyCompare {
 			canvas = stateCanvas
 		}
 		// Callers that pass the full virtual canvas (as the UI-free layout
 		// tests do) should not gain an artificial scrollbar row merely because
 		// the selected Compare state has a wider toolbar. Narrow callers still
 		// use the real client width and retain the scrollbar offset.
-		if w >= baseCanvas {
+		if w >= baseCanvas && !legacyCompare {
 			clientWidth = canvas
 		}
 	}
@@ -1141,6 +1425,13 @@ func prestackControlsLayoutForSize(w, h int, u *prestackControls, state *prestac
 // sizing. This distinction is important for narrow-window tests and for the
 // scrollbar: the virtual canvas must not make the controls switch to the wide
 // layout just because they are being measured at their scrollable width.
+func prestackCompareDeltaVisible(state *prestackSession) bool {
+	if state == nil || !state.compareShowDeltaSet {
+		return true
+	}
+	return state.compareShowDelta && state.compareBDataset != nil && state.compareBIndex != nil && !state.compareBLoading
+}
+
 func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackControls, state *prestackSession, place func(uintptr, int, int, int, int, bool)) {
 	// Page branches may override shared controls, but the native callback must
 	// receive each HWND exactly once. Preserve first-seen ordering while keeping
@@ -1197,6 +1488,15 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 	place(u.batchRun, 0, 0, 1, 1, false)
 	place(u.batchEdit, 0, 0, 1, 1, false)
 	place(u.batchReport, 0, 0, 1, 1, false)
+	// Range, export and workflow actions live in the two modeless auxiliary
+	// windows. Keep their legacy HWNDs alive for command compatibility, but do
+	// not reserve toolbar space for them.
+	for _, c := range []uintptr{u.rawTraceStartLabel, u.rawTraceStart, u.rawTraceEndLabel, u.rawTraceEnd,
+		u.rawSampleMode, u.rawSampleStartLabel, u.rawSampleStart, u.rawSampleEndLabel, u.rawSampleEnd,
+		u.rawApply, u.rawAll, u.exportGather, u.exportCSV, u.figureExport, u.sessionSave, u.sessionOpen,
+		u.batchPlan, u.batchRun, u.batchEdit, u.batchReport, u.qcExport} {
+		place(c, 0, 0, 1, 1, false)
+	}
 	x, y := 10, 76
 	// Raw file-order mode uses the same two-row toolbar as the other gather
 	// modes.  Keep the range controls on row one and the common display
@@ -1209,30 +1509,13 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 			place(c, 0, 0, 1, 1, false)
 		}
 
-		// Row one: mode and raw trace/sample range.
+		// Row one: mode plus compact entry points for the range and output
+		// windows. The detailed fields are no longer embedded in the toolbar.
 		place(u.kind, x, y, 158, 24, true)
 		x += 164
-		place(u.rawTraceStartLabel, x, y+2, 52, 22, true)
-		x += 56
-		place(u.rawTraceStart, x, y, 78, 24, true)
+		place(u.rangeWindow, x, y, 78, 24, true)
 		x += 84
-		place(u.rawTraceEndLabel, x, y+2, 52, 22, true)
-		x += 56
-		place(u.rawTraceEnd, x, y, 78, 24, true)
-		x += 84
-		place(u.rawSampleMode, x, y, 110, 24, true)
-		x += 116
-		place(u.rawSampleStartLabel, x, y+2, 82, 22, true)
-		x += 86
-		place(u.rawSampleStart, x, y, 78, 24, true)
-		x += 84
-		place(u.rawSampleEndLabel, x, y+2, 20, 22, true)
-		x += 24
-		place(u.rawSampleEnd, x, y, 78, 24, true)
-		x += 84
-		place(u.rawApply, x, y, 80, 24, true)
-		x += 86
-		place(u.rawAll, x, y, 80, 24, true)
+		place(u.toolsWindow, x, y, 124, 24, true)
 
 		// Row two: exactly the same common display controls used by gathers.
 		x, y = 10, 107
@@ -1254,24 +1537,6 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		place(u.gainPlus, x, y, 58, 24, true)
 		x += 64
 		place(u.agc, x, y, 66, 24, true)
-		x += 72
-		place(u.exportGather, x, y, 82, 24, true)
-		x += 88
-		place(u.exportCSV, x, y, 80, 24, true)
-		x += 82
-		place(u.figureExport, x, y, 102, 24, true)
-		x += 110
-		place(u.sessionSave, x, y, 74, 24, true)
-		x += 80
-		place(u.sessionOpen, x, y, 74, 24, true)
-		x += 80
-		place(u.batchPlan, x, y, 100, 24, true)
-		x += 106
-		place(u.batchRun, x, y, 100, 24, true)
-		x += 106
-		place(u.batchEdit, x, y, 110, 24, true)
-		x += 116
-		place(u.batchReport, x, y, 110, 24, true)
 	} else {
 		// Keep keyed gathers on the same deliberate two-row grid.  The old
 		// wrapping loop counted hidden raw controls when calculating x, which
@@ -1290,12 +1555,12 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		// invariant while the toolbar is scrolled. The viewport contract keeps
 		// the whole row reachable at narrow client widths.
 		compact := w < 1320
-		kindW, prevW, keyW, nextW := 150, 64, 190, 64
-		sortLabelW, sortW, axisW := 42, 124, 110
-		multiLabelW, multiEditW, multiApplyW := 50, 150, 76
+		kindW, prevW, keyW, nextW := 140, 56, 150, 56
+		sortLabelW, sortW, axisW := 32, 100, 90
+		multiLabelW, multiEditW, multiApplyW := 40, 100, 68
 		if compact {
-			kindW, prevW, keyW, nextW = 130, 56, 145, 56
-			sortLabelW, sortW, axisW = 34, 96, 90
+			kindW, prevW, keyW, nextW = 126, 52, 132, 52
+			sortLabelW, sortW, axisW = 30, 90, 84
 			multiLabelW, multiEditW, multiApplyW = 40, 100, 70
 		}
 		x, y = 10, 76
@@ -1325,9 +1590,9 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		x += multiApplyW + 8
 		isCMP := g && state.selection.Type == prestackcore.GatherCMP
 		isOffset := g && state.selection.Type == prestackcore.GatherOffset
-		binLabelW, binEditW, binApplyW := 62, 68, 76
+		binLabelW, binEditW, binApplyW := 50, 58, 68
 		if compact {
-			binLabelW, binEditW, binApplyW = 52, 58, 68
+			binLabelW, binEditW, binApplyW = 46, 54, 64
 		}
 		place(u.cmpBinLabel, x, y+2, binLabelW, 22, isCMP)
 		x += binLabelW + 4
@@ -1358,23 +1623,9 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		x += 64
 		place(u.agc, x, y, 66, 24, g)
 		x += 72
-		place(u.exportGather, x, y, 82, 24, g)
-		x += 88
-		place(u.exportCSV, x, y, 80, 24, g)
-		x += 82
-		place(u.figureExport, x, y, 102, 24, g)
-		x += 110
-		place(u.sessionSave, x, y, 74, 24, g)
-		x += 80
-		place(u.sessionOpen, x, y, 74, 24, g)
-		x += 80
-		place(u.batchPlan, x, y, 100, 24, g)
-		x += 106
-		place(u.batchRun, x, y, 100, 24, g)
-		x += 106
-		place(u.batchEdit, x, y, 110, 24, g)
-		x += 116
-		place(u.batchReport, x, y, 110, 24, g)
+		place(u.rangeWindow, x, y, 78, 24, g)
+		x += 84
+		place(u.toolsWindow, x, y, 124, 24, g)
 	}
 	m := state.page == 1
 	for i, c := range u.layers {
@@ -1403,17 +1654,22 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 	summaryTop := mappingSummaryTop + viewport.ExtraTop
 	summaryHeight := maxInt(0, h-40-summaryTop)
 	fixedPlace(u.mappingText, 18, summaryTop, maxInt(1, clientW-36), maxInt(1, summaryHeight), mapPage && summaryHeight > 0)
-	place(u.qcExport, 18, 78, 130, 27, state.page == 4)
+	if state.page == 4 {
+		place(u.toolsWindow, 18, 78, 124, 27, true)
+	} else if state.page != 0 && state.page != 3 {
+		place(u.toolsWindow, 0, 0, 1, 1, false)
+	}
 	comparePage := state.page == 3
-	compareBReady := comparePage && state.compareBDataset != nil
-	place(u.compareOpenB, 10, 78, 80, 27, comparePage)
-	place(u.compareCloseB, 94, 78, 80, 27, compareBReady || (comparePage && state.compareBLoading))
-	place(u.compareExport, 178, 78, 120, 27, compareBReady)
-	place(u.compareFilterMatched, 302, 80, 50, 24, compareBReady)
-	place(u.compareFilterAOnly, 356, 80, 50, 24, compareBReady)
-	place(u.compareFilterBOnly, 410, 80, 50, 24, compareBReady)
-	place(u.compareFilterAmbiguous, 464, 80, 50, 24, compareBReady)
-	place(u.compareFilterInvalid, 518, 80, 50, 24, compareBReady)
+	compareBReady := comparePage && state.compareBDataset != nil && state.compareBIndex != nil && !state.compareBLoading
+	place(u.compareOpenB, 10, 78, 68, 27, comparePage)
+	place(u.compareCloseB, 82, 78, 68, 27, compareBReady || (comparePage && state.compareBLoading))
+	place(u.compareExport, 154, 78, 96, 27, compareBReady)
+	place(u.compareDeltaToggle, 258, 80, 38, 24, compareBReady)
+	place(u.compareFilterMatched, 300, 80, 44, 24, compareBReady)
+	place(u.compareFilterAOnly, 348, 80, 44, 24, compareBReady)
+	place(u.compareFilterBOnly, 396, 80, 44, 24, compareBReady)
+	place(u.compareFilterAmbiguous, 444, 80, 44, 24, compareBReady)
+	place(u.compareFilterInvalid, 492, 80, 44, 24, compareBReady)
 	// Always specify hidden bounds on other pages, so Compare-only edits cannot
 	// remain visible after switching back to Gather, Mapping, Geometry or QC.
 	for _, c := range []uintptr{u.compareRangeLabel, u.compareRangeLimit, u.compareRangeMin, u.compareRangeMax, u.compareRangeApply} {
@@ -1431,38 +1687,28 @@ func prestackControlsLayoutForViewport(clientW, h, canvasW int, u *prestackContr
 		// Keep every display control on the same row as Load B. Before B is
 		// loaded, start the palette immediately after Load B; once B is ready,
 		// the filters occupy the middle of the same row.
-		displayX := 100
+		displayX := 260
 		if compareBReady {
-			displayX = 580 // follow the filter group without a reserved empty gap
+			displayX = 550 // follow the compact filter group without a reserved gap
 		} else if state.compareBLoading {
 			displayX = 184
 		}
-		place(u.wiggleDecimLabel, displayX, 82, 34, 22, true)
-		place(u.palette, displayX+38, 78, 100, 24, true)
-		place(u.gainMinus, displayX+142, 78, 40, 24, true)
-		place(u.gain, displayX+186, 80, 30, 20, true)
-		place(u.gainPlus, displayX+220, 78, 40, 24, true)
-		place(u.agc, displayX+264, 78, 50, 24, true)
+		place(u.wiggleDecimLabel, displayX, 82, 28, 22, true)
+		place(u.palette, displayX+34, 78, 88, 24, true)
+		place(u.gainMinus, displayX+132, 78, 34, 24, true)
+		place(u.gain, displayX+170, 80, 26, 20, true)
+		place(u.gainPlus, displayX+200, 78, 34, 24, true)
+		place(u.agc, displayX+238, 78, 44, 24, true)
 		place(u.compareRangeLabel, 0, 0, 1, 1, false)
-		place(u.compareRangeLimit, displayX+318, 78, 40, 24, true)
-		place(u.compareRangeMin, displayX+362, 78, 48, 24, true)
-		place(u.compareRangeMax, displayX+414, 78, 48, 24, true)
-		place(u.compareRangeApply, displayX+466, 78, 64, 24, true)
-		place(u.figureExport, displayX+536, 78, 110, 27, true)
-		place(u.sessionSave, displayX+652, 78, 78, 27, true)
-		place(u.sessionOpen, displayX+736, 78, 78, 27, true)
-		place(u.batchPlan, displayX+820, 78, 118, 27, true)
-		place(u.batchRun, displayX+944, 78, 118, 27, true)
-		place(u.batchEdit, displayX+1068, 78, 126, 27, true)
-		reportX := displayX + 1200
-		if !compareBReady && !state.compareBLoading {
-			// The pre-B row has no filter group. Keep the report action inside
-			// the compact 1400px virtual canvas so it remains reachable by the
-			// existing toolbar scrollbar without adding another row.
-			reportX = displayX + 1174
-		}
-		place(u.batchReport, reportX, 78, 126, 27, true)
+		place(u.compareRangeLimit, displayX+288, 78, 34, 24, true)
+		place(u.compareRangeMin, displayX+326, 78, 44, 24, true)
+		place(u.compareRangeMax, displayX+374, 78, 44, 24, true)
+		place(u.compareRangeApply, displayX+422, 78, 58, 24, true)
+		place(u.rangeWindow, displayX+486, 78, 78, 27, true)
+		place(u.toolsWindow, displayX+570, 78, 120, 27, true)
 	}
+	syncPrestackRangeWindow()
+	syncPrestackToolsWindow()
 }
 func prestackSceneRect() RECT {
 	r := clientRect(prestackHwnd)
@@ -1772,10 +2018,16 @@ func commitPrestackCombo(id int) {
 			selectPrestackGatherType(kind)
 		}
 	case IDPRESTACK_RAW_SAMPLE_MODE:
-		if prestackState.selection.Type == prestackcore.GatherRaw {
+		if prestackState.page == 3 {
+			applyPrestackCompareDisplayRange()
+		} else if prestackState.page == 0 {
 			v, _, _ := pSendMessageW.Call(prestackUI.rawSampleMode, CB_GETCURSEL, 0, 0)
 			if int(v) != prestackState.rawSampleModeValue {
-				applyPrestackRawRange()
+				if prestackState.selection.Type == prestackcore.GatherRaw {
+					applyPrestackRawRange()
+				} else {
+					applyPrestackGatherDisplayRange()
+				}
 			}
 		}
 	case IDPRESTACK_KEY:
@@ -2391,6 +2643,9 @@ func applyPrestackGatherSelection() {
 	prestackState.viewLast = len(result.TraceIndices) - 1
 	prestackState.sampleFirst = 0
 	prestackState.sampleLast = prestackState.dataset.Metadata.SamplesPerTrace - 1
+	prestackState.compareViewFirst, prestackState.compareViewLast = 0, -1
+	prestackState.compareViewSampleFirst, prestackState.compareViewSampleLast = prestackState.sampleFirst, prestackState.sampleLast
+	setPrestackGatherRangeControlDefaults()
 	prestackState.indices = nil
 	prestackState.bgra = nil
 	prestackState.imageWidth = 0
@@ -2601,6 +2856,11 @@ func receivePrestackCompareB(gen int64) {
 	}
 	prestackState.compareBDataset = r.dataset
 	prestackState.compareBIndex = r.index
+	prestackState.compareShowDelta = true
+	prestackState.compareShowDeltaSet = true
+	if prestackUI.compareDeltaToggle != 0 {
+		pSendMessageW.Call(prestackUI.compareDeltaToggle, BM_SETCHECK, BST_CHECKED, 0)
+	}
 	prestackState.compareBCacheStats = r.cacheStats
 	prestackState.compareBMapping = r.mapping
 	prestackState.compareBError = ""
@@ -3320,7 +3580,7 @@ func prestackCompareSummaryLines(state prestackSession) []string {
 	}
 	bName := prestackCompareShortName(state.compareBDataset.Path)
 	m := state.compareBMatch
-	deltaAvailable := state.compareBAxis.Compatible && len(m.Pairs) > 0
+	deltaAvailable := prestackCompareDeltaVisible(&state) && state.compareBAxis.Compatible && len(m.Pairs) > 0
 	// Match categories partition the B selection, unlike Records which counts
 	// the entire B file. Both numbers below therefore describe the current gather.
 	bCount := len(m.Pairs) + len(m.BOnly) + len(m.AmbiguousB) + len(m.InvalidB)
@@ -3331,9 +3591,13 @@ func prestackCompareSummaryLines(state prestackSession) []string {
 		// The complete reason stays in the Delta empty panel and export report.
 		axisText = "不兼容或无匹配"
 	}
+	deltaLabel := "关闭"
+	if prestackCompareDeltaVisible(&state) {
+		deltaLabel = map[bool]string{true: "可用", false: "禁用"}[deltaAvailable]
+	}
 	return []string{
 		fmt.Sprintf("道集：%s | 当前道集 A/B %d/%d 道 | 显示列 %d | A：%s | B：%s", gather, aCount, bCount, aColumns, aName, bName),
-		fmt.Sprintf("匹配 %d | Δ %s | A-only %d | B-only %d | 歧义 A/B %d/%d | 无效 A/B %d/%d | 轴 %s | 策略 %s", len(m.Pairs), map[bool]string{true: "可用", false: "禁用"}[deltaAvailable], len(m.AOnly), len(m.BOnly), len(m.AmbiguousA), len(m.AmbiguousB), len(m.InvalidA), len(m.InvalidB), axisText, m.Strategy),
+		fmt.Sprintf("匹配 %d | 差 %s | A-only %d | B-only %d | 歧义 A/B %d/%d | 无效 A/B %d/%d | 轴 %s | 策略 %s", len(m.Pairs), deltaLabel, len(m.AOnly), len(m.BOnly), len(m.AmbiguousA), len(m.AmbiguousB), len(m.InvalidA), len(m.InvalidB), axisText, m.Strategy),
 	}
 }
 
@@ -3357,10 +3621,28 @@ func prestackCompareSummaryRects(content RECT) [2]RECT {
 
 func paintPrestackCompare(hdc uintptr) {
 	r := prestackLayoutRECT(prestackPanelLayoutForSize(clientWidth(prestackHwnd), clientHeight(prestackHwnd), 3).Content)
-	panels := prestackComparePanelRectsForContent(r, prestackCompareSummaryHeight)
+	count := 3
+	if !prestackCompareDeltaVisible(&prestackState) {
+		count = 2
+	}
+	panels := prestackComparePanelRectsForContentCount(r, prestackCompareSummaryHeight, count)
 	paintPrestackCompareView(hdc, &prestackState, r, panels, prestackCompareSummaryLines(prestackState), prestackCompareDeltaEmptyMessage(prestackState))
 	saved, _, _ := pSaveDC.Call(hdc)
 	pIntersectClipRect.Call(hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom))
+	if len(prestackState.compareB) == 0 && len(panels) > 1 {
+		imageRect := prestackCompareRasterRect(panels[1])
+		if imageRect.Right > imageRect.Left && imageRect.Bottom > imageRect.Top {
+			textRect := imageRect
+			textRect.Left += 12
+			textRect.Right -= 12
+			if textRect.Right > textRect.Left {
+				text := prestackCompareBEmptyMessage(&prestackState)
+				textHeight := measurePrestackQCText(hdc, text, int(textRect.Right-textRect.Left))
+				textRect.Top += int32(maxInt(0, (int(textRect.Bottom-textRect.Top)-textHeight)/2))
+				drawPrestackQCText(hdc, text, textRect, DT_CENTER|prestackDTTop|DT_WORDBREAK)
+			}
+		}
+	}
 	paintPrestackComparePickPreview(hdc, panels)
 	pRestoreDC.Call(hdc, saved)
 }
@@ -3390,7 +3672,14 @@ func paintPrestackCompareView(hdc uintptr, state *prestackSession, r RECT, panel
 		pRestoreDC.Call(hdc, saved)
 		return
 	}
+	panelCount := 3
+	if !prestackCompareDeltaVisible(state) {
+		panelCount = 2
+	}
 	for i, label := range []string{"A（当前道集）", "B（匹配道集）", "Δ（A−B）"} {
+		if i >= panelCount {
+			break
+		}
 		rr := panels[i]
 		if rr.Right <= rr.Left || rr.Bottom <= rr.Top {
 			continue
@@ -3431,27 +3720,33 @@ func paintPrestackCompareView(hdc uintptr, state *prestackSession, r RECT, panel
 }
 
 func prestackCompareDeltaEmptyMessage(state prestackSession) string {
+	if !prestackCompareDeltaVisible(&state) {
+		if state.compareBDataset == nil || state.compareBIndex == nil || state.compareBLoading {
+			return "差未计算\r\n请先加载 B 并完成 B 道头索引。"
+		}
+		return "差已关闭\r\n可点击“差”恢复差值面板。"
+	}
 	if state.compareBNeedsConfirmation {
-		return "Δ 等待计算\r\n请在 Mapping 页面确认 B 的独立映射；A 保持不变。"
+		return "差等待计算\r\n请在 Mapping 页面确认 B 的独立映射；A 保持不变。"
 	}
 	if state.compareBLoading {
-		return "Δ 等待计算\r\nB 道头索引正在加载。"
+		return "差等待计算\r\nB 道头索引正在加载。"
 	}
 	if state.compareBError != "" {
-		return "Δ 未计算\r\n" + state.compareBError
+		return "差未计算\r\n" + state.compareBError
 	}
 	if state.compareBDataset == nil {
-		return "Δ 未计算\r\n请先加载与 A 采样轴兼容的 B 文件。"
+		return "差未计算\r\n请先加载与 A 采样轴兼容的 B 文件。"
 	}
 	if !state.compareBAxis.Compatible {
 		reason := state.compareBAxis.Reason
 		if reason == "" {
 			reason = "当前道集无可用匹配道"
 		}
-		return "Δ 已禁用\r\n" + reason + "\r\nA、B 仍可独立浏览。"
+		return "差已禁用\r\n" + reason + "\r\nA、B 仍可独立浏览。"
 	}
 	if len(state.compareBMatch.Pairs) == 0 {
-		return "Δ 未计算\r\n当前道集无匹配道；A、B 仍可独立浏览。"
+		return "差未计算\r\n当前道集无匹配道；A、B 仍可独立浏览。"
 	}
 	hasMatched := func(rows []prestackcore.CompareLogicalRow) bool {
 		for _, row := range rows {
@@ -3462,26 +3757,58 @@ func prestackCompareDeltaEmptyMessage(state prestackSession) string {
 		return false
 	}
 	if state.compareFilterMask&1 == 0 || !hasMatched(state.compareRows) {
-		return "Δ 未计算\r\n当前筛选无匹配道；请启用“匹配”并调整分类筛选。"
+		return "差未计算\r\n当前筛选无匹配道；请启用“匹配”并调整分类筛选。"
 	}
 	if !hasMatched(state.compareDisplayRows) {
-		return "Δ 未计算\r\n当前视窗无匹配道；请平移或双击复位。"
+		return "差未计算\r\n当前视窗无匹配道；请平移或双击复位。"
 	}
 	if state.compareWidth > 0 && !prestackCompareHasMatchedSlot(state.compareDisplayRows, state.compareWidth) {
-		return "Δ 未计算\r\n当前视窗的显示列未包含匹配道；请放大或平移后重试。"
+		return "差未计算\r\n当前视窗的显示列未包含匹配道；请放大或平移后重试。"
 	}
 	if state.compareRendering {
-		return "正在计算 Δ…"
+		return "正在计算差…"
 	}
-	return "Δ 尚无有效图像\r\n请重新加载或刷新当前道集。"
+	return "差尚无有效图像\r\n请重新加载或刷新当前道集。"
+}
+
+func prestackCompareBEmptyMessage(state *prestackSession) string {
+	if state == nil || state.compareBDataset == nil {
+		return "B 未加载\r\n请先点击“加载 B”。"
+	}
+	if state.compareBLoading {
+		return "B 道头索引正在加载\r\n请稍候。"
+	}
+	if state.compareBError != "" {
+		return "B 图像读取失败\r\n" + state.compareBError
+	}
+	for _, row := range state.compareDisplayRows {
+		if row.HasB {
+			return "B 图像尚未生成\r\n请重新刷新当前道集。"
+		}
+	}
+	return "当前道集在 B 中没有匹配道\r\nA 仍可独立浏览。"
 }
 
 func prestackComparePanelRects() [3]RECT {
 	r := prestackLayoutRECT(prestackPanelLayoutForSize(clientWidth(prestackHwnd), clientHeight(prestackHwnd), 3).Content)
-	return prestackComparePanelRectsForContent(r, prestackCompareSummaryHeight)
+	count := 3
+	if !prestackCompareDeltaVisible(&prestackState) {
+		count = 2
+	}
+	return prestackComparePanelRectsForContentCount(r, prestackCompareSummaryHeight, count)
 }
 
 func prestackComparePanelRectsForContent(r RECT, textHeight int) [3]RECT {
+	return prestackComparePanelRectsForContentCount(r, textHeight, 3)
+}
+
+func prestackComparePanelRectsForContentCount(r RECT, textHeight, count int) [3]RECT {
+	if count < 2 {
+		count = 2
+	}
+	if count > 3 {
+		count = 3
+	}
 	// Keep only a small separation after the compact summary. The previous
 	// 12-pixel reserve compounded with the old two-row toolbar offset and made
 	// the Compare page look unnecessarily empty above the panels.
@@ -3490,7 +3817,7 @@ func prestackComparePanelRectsForContent(r RECT, textHeight int) [3]RECT {
 		return [3]RECT{}
 	}
 	available := int(r.Right - r.Left)
-	columns := 3
+	columns := count
 	if available < 900 {
 		columns = 1
 	}
@@ -3499,7 +3826,7 @@ func prestackComparePanelRectsForContent(r RECT, textHeight int) [3]RECT {
 		columns = 1
 		width = available
 	}
-	rows := (3 + columns - 1) / columns
+	rows := (count + columns - 1) / columns
 	rowHeight := (int(bottom-top) - (rows-1)*12) / rows
 	if rowHeight < 42 || width < 80 {
 		// A panel needs its title plus a positive raster height. A very short
@@ -3507,7 +3834,7 @@ func prestackComparePanelRectsForContent(r RECT, textHeight int) [3]RECT {
 		return [3]RECT{}
 	}
 	var out [3]RECT
-	for i := range out {
+	for i := 0; i < count; i++ {
 		col, row := i%columns, i/columns
 		left := int(r.Left) + col*(width+12)
 		panelTop := int(top) + row*(rowHeight+12)
@@ -3589,7 +3916,11 @@ func invalidatePrestackCompareRender() {
 }
 
 func refreshPrestackCompareMatch() {
-	prestackState.compareViewFirst, prestackState.compareViewLast = 0, -1
+	// Keep the user's visible logical range across metadata rematching.  The
+	// row list may change after a key, mapping or filter update; the renderer
+	// clamps this preserved range to the new list instead of silently jumping
+	// back to the first trace.
+	requestedFirst, requestedLast := prestackState.compareViewFirst, prestackState.compareViewLast
 	if prestackState.compareBDataset == nil || prestackState.compareBIndex == nil || prestackState.index == nil {
 		clearPrestackCompareRender()
 		return
@@ -3607,6 +3938,7 @@ func refreshPrestackCompareMatch() {
 	if len(prestackState.compareBMatch.Pairs) == 0 && prestackState.compareBAxis.Reason == "" {
 		prestackState.compareBAxis.Reason = "当前道集无匹配道"
 	}
+	prestackState.compareViewFirst, prestackState.compareViewLast = requestedFirst, requestedLast
 	startPrestackCompareRender()
 }
 
@@ -3822,6 +4154,8 @@ func receivePrestackCompareRender(gen int64) {
 	if r.bErr != nil {
 		prestackState.compareBError = "B 图像读取失败：" + r.bErr.Error()
 		setPrestackStatus(prestackState.compareBError + "；A 仍可继续浏览")
+	} else if len(r.b) == 0 && prestackState.compareBDataset != nil {
+		setPrestackStatus(prestackCompareBEmptyMessage(&prestackState) + "；A 仍可继续浏览")
 	}
 	prestackState.compareA, prestackState.compareB, prestackState.compareDelta = r.a, r.b, r.delta
 	prestackState.compareWidth, prestackState.compareHeight = r.width, r.height
@@ -4633,6 +4967,14 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			if code == 0 || code == 1 {
 				openPrestackExecutionReportViewer()
 			}
+		case IDPRESTACK_RANGE_WINDOW:
+			if code == 0 || code == 1 {
+				openPrestackRangeWindow()
+			}
+		case IDPRESTACK_TOOLS_WINDOW:
+			if code == 0 || code == 1 {
+				openPrestackToolsWindow()
+			}
 		case IDPRESTACK_COMPARE_OPEN_B:
 			if code == 0 || code == 1 {
 				if path := openDialog(h); path != "" {
@@ -4647,6 +4989,20 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		case IDPRESTACK_COMPARE_EXPORT:
 			if code == 0 || code == 1 {
 				exportPrestackCompareReport()
+			}
+		case IDPRESTACK_COMPARE_DELTA:
+			if code == 0 || code == 1 {
+				v, _, _ := pSendMessageW.Call(prestackUI.compareDeltaToggle, BM_GETCHECK, 0, 0)
+				prestackState.compareShowDelta = v == BST_CHECKED
+				prestackState.compareShowDeltaSet = true
+				prestackState.compareDisplayGeneration = atomic.AddInt64(&prestackGeneration, 1)
+				layoutPrestackControls()
+				if prestackState.compareShowDelta {
+					setPrestackStatus("Compare 差 已打开")
+				} else {
+					setPrestackStatus("Compare 差 已关闭；A/B 仍可独立浏览")
+				}
+				startPrestackCompareRender()
 			}
 		case IDPRESTACK_COMPARE_FILTER_MATCHED, IDPRESTACK_COMPARE_FILTER_AONLY, IDPRESTACK_COMPARE_FILTER_BONLY, IDPRESTACK_COMPARE_FILTER_AMBIGUOUS, IDPRESTACK_COMPARE_FILTER_INVALID:
 			if code == 0 || code == 1 {
@@ -4722,15 +5078,29 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 		case IDPRESTACK_RAW_APPLY:
 			if code == 0 || code == 1 {
-				applyPrestackRawRange()
+				if prestackState.page == 3 {
+					applyPrestackCompareDisplayRange()
+				} else if prestackState.selection.Type == prestackcore.GatherRaw {
+					applyPrestackRawRange()
+				} else {
+					applyPrestackGatherDisplayRange()
+				}
 			}
 		case IDPRESTACK_RAW_ALL:
 			if code == 0 || code == 1 {
-				setRawRangeControlDefaults()
-				applyPrestackRawRange()
+				if prestackState.page == 3 {
+					setPrestackCompareRangeControlDefaults()
+					applyPrestackCompareDisplayRange()
+				} else if prestackState.selection.Type == prestackcore.GatherRaw {
+					setRawRangeControlDefaults()
+					applyPrestackRawRange()
+				} else {
+					setPrestackGatherRangeControlDefaults()
+					applyPrestackGatherDisplayRange()
+				}
 			}
 		case IDPRESTACK_RAW_SAMPLE_MODE:
-			if prestackComboSelection(code) && prestackState.selection.Type == prestackcore.GatherRaw {
+			if prestackComboSelection(code) && (prestackState.page == 0 || prestackState.page == 3) {
 				postPrestackComboCommit(id)
 			}
 		case IDPRESTACK_KEY:
@@ -5075,6 +5445,7 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case WM_DESTROY:
+		destroyPrestackAuxWindows()
 		if prestackBatchEditorWindow != nil && prestackBatchEditorWindow.hwnd != 0 {
 			// The editor is metadata-only, but it is owned by this workspace
 			// window. Close it before clearing the owner token so it cannot keep

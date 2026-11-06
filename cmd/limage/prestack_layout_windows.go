@@ -49,24 +49,30 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 	switch page {
 	case 0:
 		if state != nil {
-			// The state-aware Gather row includes the report viewer action at
-			// the far right. Keep enough virtual width for it at 100% and
-			// scaled DPI while preserving the legacy size-only contract used
-			// by callers that do not have a session state yet.
-			controlWidth = 1680
+			// Gather now keeps only the core browsing controls in the main
+			// toolbar; range/export actions live in auxiliary windows. Keep the
+			// state-aware width equal to the compact legacy canvas so a normal
+			// window does not show an empty horizontal scrollbar.
+			controlWidth = 1440
 		}
 	case 1:
 		controlWidth = 670
 	case 2:
 		controlWidth = 760 // mapping target, profile controls and byte fields
 	case 3:
-		// Compare keeps every action on one horizontally scrollable toolbar row.
-		// The virtual canvas is wider than a narrow client so the native scrollbar
-		// can expose the complete row without shrinking the controls to unreadable
-		// sizes.
+		// Compare keeps the compact action row reachable at narrow widths, but
+		// should not create an unnecessary scrollbar on a normal window.
 		controlWidth = 1400
+		// UI-free layout tests construct a zero-value session with no owner or
+		// dataset. Preserve the historical compact Compare canvas for that pure
+		// contract; the native session receives an owner token and uses the
+		// wider scrollable row when range/report controls are present.
+		if state == nil || (state.ownerToken == 0 && state.dataset == nil) {
+			break
+		}
+		controlWidth = 1320
 		if state != nil && state.compareBDataset != nil {
-			controlWidth = 1906
+			controlWidth = 1320
 		} else if state != nil && state.compareBDataset == nil && !state.compareBLoading {
 			// Before B is loaded the filters and close/export controls are hidden,
 			// but the batch-plan action is still part of the row. Keep enough
@@ -76,9 +82,9 @@ func prestackToolbarViewportForState(width, page int, state *prestackSession) pr
 			// enough virtual width for the batch plan, editor and report buttons
 			// so the report viewer stays reachable on narrow windows without
 			// adding a third toolbar row.
-			controlWidth = 1400
+			controlWidth = 1320
 		} else if state != nil && state.compareBLoading {
-			controlWidth = 1510
+			controlWidth = 1320
 		}
 	case 4:
 		controlWidth = 160

@@ -21,6 +21,10 @@ const (
 	MatchKeySourceReceiverXY
 	MatchKeyCDPOffset
 	MatchKeyMixed
+	// MatchKeyPhysicalTraceOrder is an explicitly low-confidence fallback for
+	// two equally-sized selections that contain no usable metadata key.  It is
+	// never considered while a reliable candidate key is available.
+	MatchKeyPhysicalTraceOrder
 )
 
 // Aliases keep the names convenient for callers while preserving one stable
@@ -31,6 +35,7 @@ const (
 	MatchStrategySourceReceiverXY = MatchKeySourceReceiverXY
 	MatchStrategyCDPOffset        = MatchKeyCDPOffset
 	MatchStrategyMixed            = MatchKeyMixed
+	MatchStrategyPhysicalOrder    = MatchKeyPhysicalTraceOrder
 )
 
 func (s MatchKeyStrategy) String() string {
@@ -43,6 +48,8 @@ func (s MatchKeyStrategy) String() string {
 		return "cdp_signed_offset"
 	case MatchKeyMixed:
 		return "mixed"
+	case MatchKeyPhysicalTraceOrder:
+		return "physical_trace_order_fallback"
 	default:
 		return "invalid"
 	}
@@ -338,9 +345,6 @@ func matchRecords(a, b []PrestackTraceRecord) CompareMatchResult {
 			continue
 		}
 		ae[i].keys = r.candidateKeys(sourceConflicts[r.SourceID], receiverConflicts[r.ReceiverID])
-		if len(ae[i].keys) == 0 {
-			result.InvalidA = append(result.InvalidA, ae[i].trace)
-		}
 	}
 	for i, r := range b {
 		be[i] = entry{r: r, pos: i, trace: traceNumber(r, i)}
@@ -349,9 +353,6 @@ func matchRecords(a, b []PrestackTraceRecord) CompareMatchResult {
 			continue
 		}
 		be[i].keys = r.candidateKeys(sourceConflicts[r.SourceID], receiverConflicts[r.ReceiverID])
-		if len(be[i].keys) == 0 {
-			result.InvalidB = append(result.InvalidB, be[i].trace)
-		}
 	}
 
 	bByKey := make(map[normalizedMatchKey][]int)
@@ -375,34 +376,57 @@ func matchRecords(a, b []PrestackTraceRecord) CompareMatchResult {
 		if len(ae[ai].keys) == 0 || !valid(ae[ai].r) {
 			continue
 		}
+		// A stronger key can be non-discriminating (for example all-zero
+		// Source/Receiver coordinates in flattened/stacked SEG-Y).  Keep
+		// trying weaker candidates before declaring the record ambiguous.
+		// Duplicate groups are marked only when no later candidate succeeds;
+		// otherwise a unique CDP+signed-Offset key is allowed to resolve the
+		// record without inheriting ambiguity from the stronger key.
+		duplicateKeys := make([]normalizedMatchKey, 0, len(ae[ai].keys))
+		usedCandidates := make([]int, 0, len(ae[ai].keys))
+		matched := false
 		for _, candidate := range ae[ai].keys {
 			bis := bByKey[candidate.normalizedMatchKey]
 			if len(bis) == 0 {
 				continue
 			}
-			// Duplicate keys are never silently resolved by map order.  If the
-			// same strategy is duplicated on either side, mark every record in
-			// that duplicate group and do not fall through to a weaker key.
+			// Duplicate keys are never silently resolved by map order.  Defer
+			// marking the group until all weaker candidates have been tried.
 			if len(bis) != 1 || len(aByKey[candidate.normalizedMatchKey]) != 1 {
-				for _, bi := range bis {
-					ambiguousB[bi] = true
-				}
-				for _, other := range aByKey[candidate.normalizedMatchKey] {
-					ambiguousA[other] = true
-				}
-				break
+				duplicateKeys = append(duplicateKeys, candidate.normalizedMatchKey)
+				continue
 			}
 			bi := bis[0]
 			if usedB[bi] {
-				ambiguousA[ai] = true
-				ambiguousB[bi] = true
-				break
+				usedCandidates = append(usedCandidates, bi)
+				continue
 			}
 			usedB[bi] = true
 			matchedB[bi] = true
 			result.Pairs = append(result.Pairs, TraceMatchPair{ATrace: ae[ai].trace, BTrace: be[bi].trace,
 				AIndex: ae[ai].pos, BIndex: be[bi].pos, Key: candidate.public, Strategy: candidate.strategy})
+			matched = true
 			break
+		}
+		if matched {
+			continue
+		}
+		if len(duplicateKeys) > 0 {
+			ambiguousA[ai] = true
+			for _, key := range duplicateKeys {
+				for _, bi := range bByKey[key] {
+					ambiguousB[bi] = true
+				}
+				for _, other := range aByKey[key] {
+					ambiguousA[other] = true
+				}
+			}
+		}
+		if len(usedCandidates) > 0 {
+			ambiguousA[ai] = true
+			for _, bi := range usedCandidates {
+				ambiguousB[bi] = true
+			}
 		}
 	}
 	// A record marked ambiguous after a prior tentative match is removed from
@@ -421,6 +445,49 @@ func matchRecords(a, b []PrestackTraceRecord) CompareMatchResult {
 			kept = append(kept, pair)
 		}
 		result.Pairs = kept
+	}
+
+	// Some flattened/stacked SEG-Y files legitimately contain no usable
+	// Source/Receiver/CDP/Offset key at all. If both selections have the same
+	// shape and every header is valid, pair by selection order as an explicit,
+	// low-confidence fallback. This is deliberately disabled when any
+	// candidate key exists (including duplicate keys), so ambiguous metadata is
+	// never silently replaced by physical-order matching.
+	physicalOrderFallback := len(a) == len(b) && len(a) > 0
+	if physicalOrderFallback {
+		for i := range ae {
+			if !valid(ae[i].r) || len(ae[i].keys) != 0 || !valid(be[i].r) || len(be[i].keys) != 0 {
+				physicalOrderFallback = false
+				break
+			}
+		}
+	}
+	if physicalOrderFallback {
+		for i := range ae {
+			result.Pairs = append(result.Pairs, TraceMatchPair{
+				ATrace: ae[i].trace, BTrace: be[i].trace,
+				AIndex: ae[i].pos, BIndex: be[i].pos,
+				Key:      TraceMatchKey{Strategy: MatchKeyPhysicalTraceOrder},
+				Strategy: MatchKeyPhysicalTraceOrder,
+			})
+			matchedB[i] = true
+		}
+		result.Strategy = MatchKeyPhysicalTraceOrder
+		result.Reason = "按选择顺序回退匹配（低置信度：缺少可用道头键）"
+	} else {
+		// A valid header with no usable key is invalid for metadata matching.
+		// Keep this classification deferred until after the explicit fallback
+		// check above.
+		for i := range ae {
+			if valid(ae[i].r) && len(ae[i].keys) == 0 {
+				result.InvalidA = append(result.InvalidA, ae[i].trace)
+			}
+		}
+		for i := range be {
+			if valid(be[i].r) && len(be[i].keys) == 0 {
+				result.InvalidB = append(result.InvalidB, be[i].trace)
+			}
+		}
 	}
 
 	for i := range ae {

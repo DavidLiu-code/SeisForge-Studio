@@ -125,7 +125,7 @@ func TestPrestackCompareReaderPositiveDeltaAndInvalidAxis(t *testing.T) {
 		t.Fatalf("invalid-header fixture must not silently allow Delta: %+v", invalidAxis)
 	}
 	message := prestackCompareDeltaEmptyMessage(prestackSession{compareBDataset: &dataset.SeismicDataset{}, compareBAxis: invalidAxis})
-	if !strings.Contains(message, "Δ 已禁用") || !strings.Contains(message, invalidAxis.Reason) {
+	if !strings.Contains(message, "差已禁用") || !strings.Contains(message, invalidAxis.Reason) {
 		t.Fatalf("Delta panel does not explain disabled output: %q", message)
 	}
 }

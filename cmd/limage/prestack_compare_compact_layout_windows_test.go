@@ -99,13 +99,13 @@ func TestPrestackCompareSummaryHasTwoNonWrappingRows(t *testing.T) {
 			t.Fatalf("summary must not embed multiline diagnostics: %q", line)
 		}
 	}
-	if !strings.Contains(lines[0], "…") || !strings.Contains(lines[1], "Δ 禁用") {
+	if !strings.Contains(lines[0], "…") || !strings.Contains(lines[1], "差 禁用") {
 		t.Fatalf("long names or disabled Delta status missing: %q", lines)
 	}
 	state.compareBMatch.Pairs = nil
 	state.compareBAxis.Compatible = true
 	lines = prestackCompareSummaryLines(state)
-	if !strings.Contains(lines[1], "Δ 禁用") || !strings.Contains(lines[1], "无匹配道") {
+	if !strings.Contains(lines[1], "差 禁用") || !strings.Contains(lines[1], "无匹配道") {
 		t.Fatalf("compatible axes alone must not advertise Delta for no matching traces: %q", lines)
 	}
 	state.compareBDataset = nil

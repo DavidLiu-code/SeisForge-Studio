@@ -445,6 +445,7 @@ const (
 var paletteNames = []string{
 	"红灰青", "白灰黑", "黑灰白", "蓝灰红", "蓝灰褐1", "绿灰褐1", "蓝灰褐2", "绿灰褐2", "蓝灰橙", "绿灰橙",
 	"绿灰褐3", "蓝灰褐3", "蓝黄褐", "绿灰红", "红黄蓝", "红蓝黄", "黄红绿", "绿红蓝", "灰黄橙", "灰绿黄",
+	"工业蓝白红",
 }
 
 var legacyAnchors = [20][3]uint32{
@@ -880,19 +881,7 @@ func displayModeLabel(m segy.DisplayMode) string {
 }
 
 func currentPalette() [256]rgb {
-	idx := paletteIndex
-	if idx < 0 || idx >= len(legacyAnchors) {
-		idx = 2
-	}
-	a := legacyAnchors[idx]
-	// The original table is stored end/mid/start; routine 0x408610 reverses it.
-	start, mid, end := tcolor(a[2]), tcolor(a[1]), tcolor(a[0])
-	var p [256]rgb
-	for i := 0; i < 128; i++ {
-		p[i] = rgb{lerp(start.r, mid.r, i), lerp(start.g, mid.g, i), lerp(start.b, mid.b, i)}
-		p[128+i] = rgb{lerp(mid.r, end.r, i), lerp(mid.g, end.g, i), lerp(mid.b, end.b, i)}
-	}
-	return p
+	return paletteRGB(paletteIndex)
 }
 func applyPalette() {
 	if len(indices) == 0 {

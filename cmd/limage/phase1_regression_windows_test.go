@@ -26,11 +26,12 @@ func TestPhase1DisplayParametersFrozen(t *testing.T) {
 	expectedNames := []string{
 		"红灰青", "白灰黑", "黑灰白", "蓝灰红", "蓝灰褐1", "绿灰褐1", "蓝灰褐2", "绿灰褐2", "蓝灰橙", "绿灰橙",
 		"绿灰褐3", "蓝灰褐3", "蓝黄褐", "绿灰红", "红黄蓝", "红蓝黄", "黄红绿", "绿红蓝", "灰黄橙", "灰绿黄",
+		"工业蓝白红",
 	}
 	if !reflect.DeepEqual(paletteNames, expectedNames) || len(legacyAnchors) != 20 {
 		t.Fatalf("legacy palette catalog or order changed: %v", paletteNames)
 	}
-	if !reflect.DeepEqual(volumePaletteOrder, []int{1, 2, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}) {
+	if !reflect.DeepEqual(volumePaletteOrder, []int{1, 2, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, industrialPaletteIndex}) {
 		t.Fatalf("volume palette order changed: %v", volumePaletteOrder)
 	}
 	if !reflect.DeepEqual(volumeStyleComboOrder, []int{3, 0, 1, 2}) {

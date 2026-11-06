@@ -24,22 +24,23 @@ func TestPrestackFigureButtonSharesExistingToolbarRows(t *testing.T) {
 					// Full canvas lets us check the final row without clipping;
 					// the existing narrow tests verify native scrollbar reachability.
 					placed := prestackNarrowPlacements(viewport.CanvasWidth, 600, u, &state)
-					p := placed[u.figureExport]
-					if p.visible != (page == 0 || page == 3) {
-						t.Fatalf("figure action visibility on page %d: %+v", page, p)
+					p := placed[u.toolsWindow]
+					for _, hidden := range []uintptr{u.figureExport, u.exportGather, u.exportCSV, u.sessionSave, u.sessionOpen, u.batchPlan, u.batchRun, u.batchEdit, u.batchReport, u.rawTraceStart, u.rawSampleMode} {
+						if placed[hidden].visible {
+							t.Fatalf("legacy action/range control remained in main toolbar on page %d: %s", page, names[hidden])
+						}
+					}
+					if p.visible != (page == 0 || page == 3 || page == 4) {
+						t.Fatalf("tools action visibility on page %d: %+v", page, p)
 					}
 					if !p.visible {
 						continue
 					}
-					row := 107
-					if page == 3 {
-						row = 78
-					}
-					if p.rect.Top != row || p.rect.Right > viewport.CanvasWidth {
-						t.Fatalf("figure action adds a row or escapes the toolbar: %+v", p)
+					if (p.rect.Top < 76 || p.rect.Top > 132) || p.rect.Right > viewport.CanvasWidth {
+						t.Fatalf("tools action adds a row or escapes the toolbar: %+v", p)
 					}
 					for handle, other := range placed {
-						if handle != u.figureExport && !fixed[handle] && other.visible && prestackNarrowRectsOverlap(p.rect, other.rect) {
+						if handle != u.toolsWindow && !fixed[handle] && other.visible && prestackNarrowRectsOverlap(p.rect, other.rect) {
 							t.Fatalf("figure action overlaps %s", names[handle])
 						}
 					}

@@ -46,7 +46,7 @@ func TestPrestackCompareDeltaEmptyReasons(t *testing.T) {
 			s.compareBAxis = prestackcore.SampleAxisCompatibility{Reason: "SampleInterval 不一致"}
 			s.compareBMatch.Pairs = nil
 		}, "SampleInterval 不一致"},
-		{"rendering matched rows", func(s *prestackSession) { s.compareRendering = true }, "正在计算 Δ"},
+		{"rendering matched rows", func(s *prestackSession) { s.compareRendering = true }, "正在计算差"},
 		{"empty filter while rendering", func(s *prestackSession) { s.compareRendering = true; s.compareFilterMask = 0 }, "当前筛选无匹配道"},
 	}
 	for _, test := range tests {
