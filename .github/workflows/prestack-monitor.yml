@@ -3,6 +3,7 @@ name: Prestack monitor
 on:
   push:
     branches:
+      - main
       - prestack-pidx
   pull_request:
     branches:
@@ -52,6 +53,10 @@ jobs:
       - name: Run tests
         shell: pwsh
         run: go test ./... -count=1
+
+      - name: Enforce copylock-free code
+        shell: pwsh
+        run: go vet -copylocks ./...
 
       - name: Run vet
         shell: pwsh
