@@ -9,12 +9,60 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+// nativeArgumentsEqual compares the arguments passed to the renderer while
+// allowing Windows to spell the same temporary directory with either its
+// long name or its 8.3 short name. PowerShell resolves $PSScriptRoot to the
+// long form on some hosted runners, whereas Go's t.TempDir may return the
+// short form. Only renderer-owned paths are relaxed; source arguments and
+// flags remain exact comparisons.
+func nativeArgumentsEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	pathFlags := map[string]bool{
+		"--render-recipe": true,
+		"--output":        true,
+		"--result":        true,
+	}
+	for i := range got {
+		if got[i] == want[i] {
+			continue
+		}
+		if i > 0 && got[i-1] == want[i-1] && pathFlags[want[i-1]] && windowsTempPathEqual(got[i], want[i]) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func windowsTempPathEqual(got, want string) bool {
+	clean := func(value string) string {
+		value = strings.ReplaceAll(value, "/", "\\")
+		return strings.ToLower(filepath.Clean(value))
+	}
+	g, w := clean(got), clean(want)
+	if g == w {
+		return true
+	}
+	if gInfo, gErr := os.Stat(g); gErr == nil {
+		if wInfo, wErr := os.Stat(w); wErr == nil && os.SameFile(gInfo, wInfo) {
+			return true
+		}
+	}
+	if !strings.EqualFold(filepath.Base(g), filepath.Base(w)) {
+		return false
+	}
+	gInfo, gErr := os.Stat(filepath.Dir(g))
+	wInfo, wErr := os.Stat(filepath.Dir(w))
+	return gErr == nil && wErr == nil && os.SameFile(gInfo, wInfo)
+}
 
 func TestPowerShell51ScriptPreservesNativeArguments(t *testing.T) {
 	// These checks always run, even when policy prevents executing an unsigned
@@ -112,7 +160,7 @@ func main(){
 		if overwrite {
 			want = append(want, "--overwrite")
 		}
-		if !reflect.DeepEqual(got, want) {
+		if !nativeArgumentsEqual(got, want) {
 			t.Fatalf("native arguments changed\ngot: %#v\nwant:%#v", got, want)
 		}
 	}
