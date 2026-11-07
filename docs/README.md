@@ -1,6 +1,6 @@
 # SeisForge Studio 文档
 
-本目录提供 SeisForge Studio 1.10.4-rc1 的使用、构建、架构和兼容性说明。
+本目录提供 SeisForge Studio 1.10.4 的使用、构建、架构和兼容性说明。
 
 ## 使用者
 
@@ -15,6 +15,7 @@
 - [1.10.2 发布说明](releases/v1.10.2.md)：原始叠前道序、范围读取和窗口调整稳定性。
 - [1.10.3 发布说明](releases/v1.10.3.md)：叠前 QC、异步稳定性和震源—检波点联动。
 - [1.10.4-rc1 候选说明](releases/v1.10.4-rc1.md)：只读叠前 A/B Compare、synthetic SEG-Y 验收和发布门禁。
+- [1.10.4 发布说明](releases/v1.10.4.md)：叠前 A/B Compare 稳定版、工业色标和匹配增强。
 - [原始叠前道序架构](architecture/ARCHITECTURE_PRESTACK_RAW_ORDER.md)：物理道序、范围、代次和窗口尺寸生命周期。
 - [版本记录](../CHANGELOG.md)：1.9.x–1.10.x 用户可见变化。
 

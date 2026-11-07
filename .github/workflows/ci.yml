@@ -33,6 +33,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: SeisForgeStudio-windows-x64
-          path: SeisForgeStudio_v1.10.4-rc1_compare_x64.exe
+          path: SeisForgeStudio_v1.10.4_compare_x64.exe
           if-no-files-found: error
           retention-days: 14
