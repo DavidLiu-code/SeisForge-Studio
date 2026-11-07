@@ -5460,6 +5460,10 @@ func prestackWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			pDestroyWindow.Call(prestackExecutionReportWindow.hwnd)
 			prestackExecutionReportWindow = nil
 		}
+		if prestackExecutionHistoryWindow != nil && prestackExecutionHistoryWindow.hwnd != 0 {
+			pDestroyWindow.Call(prestackExecutionHistoryWindow.hwnd)
+			prestackExecutionHistoryWindow = nil
+		}
 		cancelPrestackJobs()
 		prestackDeliveryMu.Lock()
 		prestackDeliveryHwnd = 0

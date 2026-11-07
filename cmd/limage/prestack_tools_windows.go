@@ -42,8 +42,9 @@ const (
 	prestackToolsReport      = 10
 	prestackToolsCompare     = 11
 	prestackToolsQC          = 12
-	prestackToolsClose       = 13
-	prestackToolsStatus      = 14
+	prestackToolsHistory     = 13
+	prestackToolsClose       = 14
+	prestackToolsStatus      = 15
 )
 
 type prestackRangeWindowState struct {
@@ -52,10 +53,10 @@ type prestackRangeWindowState struct {
 }
 
 type prestackToolsWindowState struct {
-	hwnd, owner                                         uintptr
-	summary                                             uintptr
-	gather, csv, figure, sessionSave, sessionOpen       uintptr
-	plan, run, edit, report, compare, qc, close, status uintptr
+	hwnd, owner                                                  uintptr
+	summary                                                      uintptr
+	gather, csv, figure, sessionSave, sessionOpen                uintptr
+	plan, run, edit, report, compare, qc, history, close, status uintptr
 }
 
 var prestackRangeWindow *prestackRangeWindowState
@@ -74,6 +75,7 @@ func ensurePrestackAuxClasses() {
 		registerClass(prestackToolsClass, syscall.NewCallback(prestackToolsWndProc), COLOR_WINDOW+1, hi, cursor)
 		prestackToolsClassRegistered = true
 	}
+	ensurePrestackHistoryClass()
 }
 
 func openPrestackRangeWindow() {
@@ -237,7 +239,7 @@ func syncPrestackToolsWindow() {
 		return
 	}
 	setText(s.summary, fmt.Sprintf("当前页面：%s | %s", prestackAuxPageLabel(), prestackSelectionKeyLabel(prestackState.selection)))
-	for _, c := range []uintptr{s.gather, s.csv, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report, s.compare, s.qc} {
+	for _, c := range []uintptr{s.gather, s.csv, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report, s.compare, s.qc, s.history} {
 		pShowWindow.Call(c, SW_HIDE)
 	}
 	pEnableWindow.Call(s.gather, map[bool]uintptr{true: 1, false: 0}[prestackState.dataset != nil && prestackState.index != nil])
@@ -246,15 +248,16 @@ func syncPrestackToolsWindow() {
 	show := func(c uintptr) { pShowWindow.Call(c, SW_SHOWNA) }
 	switch prestackState.page {
 	case 0:
-		for _, c := range []uintptr{s.gather, s.csv, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report} {
+		for _, c := range []uintptr{s.gather, s.csv, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report, s.history} {
 			show(c)
 		}
 	case 3:
-		for _, c := range []uintptr{s.compare, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report} {
+		for _, c := range []uintptr{s.compare, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report, s.history} {
 			show(c)
 		}
 	case 4:
 		show(s.qc)
+		show(s.history)
 	}
 	if prestackState.compareBDataset != nil {
 		setText(s.status, fmt.Sprintf("B：已加载；差 %s。", map[bool]string{true: "显示", false: "关闭"}[prestackCompareDeltaVisible(&prestackState)]))
@@ -284,7 +287,7 @@ func prestackAuxLayoutTools(s *prestackToolsWindowState, width, height int) {
 		return
 	}
 	pMoveWindow.Call(s.summary, 14, 12, uintptr(maxInt(1, width-28)), 24, 1)
-	buttons := []uintptr{s.gather, s.csv, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report, s.compare, s.qc}
+	buttons := []uintptr{s.gather, s.csv, s.figure, s.sessionSave, s.sessionOpen, s.plan, s.run, s.edit, s.report, s.compare, s.qc, s.history}
 	for i, c := range buttons {
 		col, row := i%2, i/2
 		pMoveWindow.Call(c, uintptr(14+col*220), uintptr(52+row*34), 200, 27, 1)
@@ -376,6 +379,7 @@ func prestackToolsWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr
 		s.report = newButton("查看执行报告", prestackToolsReport)
 		s.compare = newButton("导出匹配报告", prestackToolsCompare)
 		s.qc = newButton("导出 QC 报告", prestackToolsQC)
+		s.history = newButton("查看批处理历史", prestackToolsHistory)
 		s.close = createCtrl(h, "BUTTON", "关闭", WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON, 410, 332, 90, 27, prestackToolsClose)
 		s.status = createCtrl(h, "STATIC", "", WS_CHILD|WS_VISIBLE|WS_BORDER, 14, 366, 480, 24, prestackToolsStatus)
 		return 0
@@ -415,6 +419,8 @@ func prestackToolsWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintptr
 			exportPrestackCompareReport()
 		case prestackToolsQC:
 			exportPrestackQC()
+		case prestackToolsHistory:
+			openPrestackExecutionHistoryViewer()
 		case prestackToolsClose:
 			pDestroyWindow.Call(h)
 		}

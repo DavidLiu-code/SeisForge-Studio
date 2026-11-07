@@ -90,11 +90,27 @@ func runPrestackBatchPlan(ctx context.Context, options prestackBatchCLIOptions) 
 			fmt.Fprintln(os.Stderr, "warning: unable to save batch execution report:", err)
 		}
 	}
+	recordHistory := func() {
+		historyPath, err := prestackbatch.DefaultHistoryPath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "warning: unable to locate batch history:", err)
+			return
+		}
+		entry, err := prestackbatch.NewHistoryEntryAt(report, reportPath, plan.OutputDirectory)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "warning: unable to create batch history entry:", err)
+			return
+		}
+		if err := prestackbatch.AppendHistory(historyPath, entry); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: unable to save batch history:", err)
+		}
+	}
 	writeReport()
 	for i, job := range plan.Figures {
 		if err := ctx.Err(); err != nil {
 			_ = report.Finish(prestackbatch.ExecutionCanceled, err.Error())
 			writeReport()
+			recordHistory()
 			return err
 		}
 		_ = report.SetTask(i, prestackbatch.ExecutionRunning, "")
@@ -111,6 +127,7 @@ func runPrestackBatchPlan(ctx context.Context, options prestackBatchCLIOptions) 
 			_ = report.SetTask(i, status, err.Error())
 			_ = report.Finish(status, err.Error())
 			writeReport()
+			recordHistory()
 			return fmt.Errorf("figure %s: %w", job.ID, err)
 		}
 		_ = report.SetTask(i, prestackbatch.ExecutionSucceeded, "")
@@ -121,6 +138,7 @@ func runPrestackBatchPlan(ctx context.Context, options prestackBatchCLIOptions) 
 		if err := ctx.Err(); err != nil {
 			_ = report.Finish(prestackbatch.ExecutionCanceled, err.Error())
 			writeReport()
+			recordHistory()
 			return err
 		}
 		_ = report.SetTask(taskIndex, prestackbatch.ExecutionRunning, "")
@@ -133,6 +151,7 @@ func runPrestackBatchPlan(ctx context.Context, options prestackBatchCLIOptions) 
 			_ = report.SetTask(taskIndex, status, err.Error())
 			_ = report.Finish(status, err.Error())
 			writeReport()
+			recordHistory()
 			return fmt.Errorf("QC %s: %w", job.ID, err)
 		}
 		_ = report.SetTask(taskIndex, prestackbatch.ExecutionSucceeded, "")
@@ -140,6 +159,7 @@ func runPrestackBatchPlan(ctx context.Context, options prestackBatchCLIOptions) 
 	}
 	_ = report.Finish(prestackbatch.ExecutionSucceeded, "")
 	writeReport()
+	recordHistory()
 	return nil
 }
 

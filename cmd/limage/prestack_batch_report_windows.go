@@ -64,6 +64,12 @@ func openPrestackExecutionReportViewer() {
 	if path == "" {
 		return
 	}
+	openPrestackExecutionReportAt(path)
+}
+
+// openPrestackExecutionReportAt opens a known report path. It is shared by
+// the file-picker entry point and the read-only batch-history viewer.
+func openPrestackExecutionReportAt(path string) {
 	report, err := prestackbatch.LoadExecutionReport(path)
 	if err != nil {
 		message(prestackHwnd, "查看执行报告", "读取执行报告失败："+err.Error(), MB_OK|MB_ICONERROR)
