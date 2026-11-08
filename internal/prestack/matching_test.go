@@ -2,6 +2,7 @@ package prestack
 
 import (
 	"bytes"
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
@@ -38,6 +39,50 @@ func TestMatchGatherResultsUsesSelectionOrder(t *testing.T) {
 	r, err := MatchGatherResults(aIndex, GatherResult{TraceIndices: []int64{1, 0}}, bIndex, GatherResult{TraceIndices: []int64{0, 1}})
 	if err != nil || len(r.Pairs) != 2 || r.Pairs[0].ATrace != 11 || r.Pairs[0].BTrace != 20 {
 		t.Fatalf("selection order not preserved: %+v err=%v", r, err)
+	}
+}
+
+func TestMatchRecordsKeepsPhysicalZeroAfterReordering(t *testing.T) {
+	a := []PrestackTraceRecord{matchRecord(3, 1, 3, 1, 2), matchRecord(0, 1, 2, 1, 1)}
+	b := []PrestackTraceRecord{matchRecord(8, 1, 3, 1, 2), matchRecord(0, 1, 2, 1, 1)}
+	result := MatchRecords(a, b)
+	if len(result.Pairs) != 2 || result.Pairs[1].ATrace != 0 || result.Pairs[1].BTrace != 0 {
+		t.Fatalf("physical trace zero became a selection ordinal: %+v", result)
+	}
+	rows := FilterCompareRows(result, a, b, DefaultCompareFilterSet())
+	if len(rows) != 2 || rows[1].ATrace != 0 || rows[1].BTrace != 0 {
+		t.Fatalf("hover/analysis row lost physical trace zero: %+v", rows)
+	}
+	report := BuildCompareMatchReportWithOptions(result, SampleAxisCompatibility{}, CompareMatchReportOptions{IncludePairs: true, ARecords: a, BRecords: b})
+	if report.Pairs[1].ATrace != 0 || report.Pairs[1].BTrace != 0 || report.Pairs[1].AMetadata.TraceNumber != 0 || report.Pairs[1].BMetadata.TraceNumber != 0 {
+		t.Fatalf("report lost physical trace zero: %+v", report.Pairs[1])
+	}
+}
+
+func TestCompareReportPreservesZeroPhysicalTraceJSON(t *testing.T) {
+	for _, classification := range []string{"matched", "a_only", "b_only", "ambiguous_a", "ambiguous_b", "invalid_a", "invalid_b"} {
+		t.Run(classification, func(t *testing.T) {
+			row := CompareMatchReportRow{Classification: classification, ATrace: 0, BTrace: 0}
+			data, err := json.Marshal(row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded struct {
+				ATrace *int64 `json:"a_trace"`
+				BTrace *int64 `json:"b_trace"`
+			}
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			wantA := classification == "matched" || classification == "a_only" || strings.HasSuffix(classification, "_a")
+			wantB := classification == "matched" || classification == "b_only" || strings.HasSuffix(classification, "_b")
+			if (decoded.ATrace != nil) != wantA || (decoded.BTrace != nil) != wantB {
+				t.Fatalf("present physical trace zero or absent side encoded incorrectly: %s", data)
+			}
+			if (decoded.ATrace != nil && *decoded.ATrace != 0) || (decoded.BTrace != nil && *decoded.BTrace != 0) {
+				t.Fatalf("physical trace zero changed in JSON: %s", data)
+			}
+		})
 	}
 }
 
@@ -97,6 +142,58 @@ func TestMatchRecordsFallbackAndInvalidAccounting(t *testing.T) {
 	}
 	if len(r.InvalidA) != 2 || len(r.BOnly) != 1 {
 		t.Fatalf("invalid/only accounting=%+v", r)
+	}
+}
+
+func TestMatchRecordsSkipsDuplicateXYWhenCDPOffsetIsUnique(t *testing.T) {
+	// These flattened/stacked-style files commonly have zero Source/Receiver
+	// IDs and one repeated (0,0) geometry tuple.  The geometry key is therefore
+	// non-discriminating, but CDP plus the signed header offset still identifies
+	// each trace.  A duplicate stronger key must not prevent trying that later
+	// key.
+	a := []PrestackTraceRecord{
+		{TraceNumber: 1, SourceX: 0, SourceY: 0, ReceiverX: 0, ReceiverY: 0, HasSource: true, HasReceiver: true, CDP: 100, HasCDP: true, Offset: 0, HasOffset: true, HeaderValid: true},
+		{TraceNumber: 2, SourceX: 0, SourceY: 0, ReceiverX: 0, ReceiverY: 0, HasSource: true, HasReceiver: true, CDP: 101, HasCDP: true, Offset: 0, HasOffset: true, HeaderValid: true},
+	}
+	b := []PrestackTraceRecord{
+		{TraceNumber: 20, SourceX: 0, SourceY: 0, ReceiverX: 0, ReceiverY: 0, HasSource: true, HasReceiver: true, CDP: 101, HasCDP: true, Offset: 0, HasOffset: true, HeaderValid: true},
+		{TraceNumber: 21, SourceX: 0, SourceY: 0, ReceiverX: 0, ReceiverY: 0, HasSource: true, HasReceiver: true, CDP: 100, HasCDP: true, Offset: 0, HasOffset: true, HeaderValid: true},
+	}
+	r := MatchRecords(a, b)
+	if len(r.Pairs) != 2 {
+		t.Fatalf("duplicate XY blocked CDP/offset fallback: %+v", r)
+	}
+	if r.Pairs[0].ATrace != 1 || r.Pairs[0].BTrace != 21 || r.Pairs[1].ATrace != 2 || r.Pairs[1].BTrace != 20 {
+		t.Fatalf("A order or CDP pairing lost: %+v", r.Pairs)
+	}
+	if r.Pairs[0].Strategy != MatchKeyCDPOffset || r.Pairs[1].Strategy != MatchKeyCDPOffset {
+		t.Fatalf("unexpected fallback strategy: %+v", r.Pairs)
+	}
+}
+
+func TestMatchRecordsPhysicalOrderFallbackRequiresEqualKeylessShape(t *testing.T) {
+	a := []PrestackTraceRecord{
+		{TraceNumber: 4, HeaderValid: true},
+		{TraceNumber: 5, HeaderValid: true},
+	}
+	b := []PrestackTraceRecord{
+		{TraceNumber: 40, HeaderValid: true},
+		{TraceNumber: 41, HeaderValid: true},
+	}
+	r := MatchRecords(a, b)
+	if r.Strategy != MatchKeyPhysicalTraceOrder || len(r.Pairs) != 2 || len(r.InvalidA) != 0 || len(r.InvalidB) != 0 {
+		t.Fatalf("keyless equal-shape selections did not use explicit fallback: %+v", r)
+	}
+	if r.Pairs[0].ATrace != 4 || r.Pairs[0].BTrace != 40 || r.Pairs[1].ATrace != 5 || r.Pairs[1].BTrace != 41 {
+		t.Fatalf("physical-order fallback changed selection order: %+v", r.Pairs)
+	}
+	if !strings.Contains(r.Reason, "低置信度") {
+		t.Fatalf("fallback reason omitted confidence warning: %q", r.Reason)
+	}
+
+	unequal := MatchRecords(a, append(b, PrestackTraceRecord{TraceNumber: 42, HeaderValid: true}))
+	if unequal.Strategy == MatchKeyPhysicalTraceOrder || len(unequal.Pairs) != 0 || len(unequal.InvalidA) != len(a) || len(unequal.InvalidB) != 3 {
+		t.Fatalf("unequal keyless selections unexpectedly fell back: %+v", unequal)
 	}
 }
 

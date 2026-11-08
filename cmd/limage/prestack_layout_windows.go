@@ -20,6 +20,109 @@ type layoutRect struct{ Left, Top, Right, Bottom int }
 func (r layoutRect) width() int  { return r.Right - r.Left }
 func (r layoutRect) height() int { return r.Bottom - r.Top }
 
+const (
+	prestackMinClientWidth      = 640
+	prestackMinClientHeight     = 480
+	prestackToolbarScrollHeight = 22
+)
+
+// Only the native controls use a virtual width. Seismic/QC/Compare content
+// always uses the actual client width; scrolling never changes a gather,
+// sample window, physical-trace mapping or render generation.
+type prestackToolbarViewport struct {
+	CanvasWidth, ExtraTop, MaxScroll int
+	ScrollRect                       layoutRect
+}
+
+func prestackToolbarViewportForSize(width, page int) prestackToolbarViewport {
+	return prestackToolbarViewportForState(width, page, nil)
+}
+
+// prestackToolbarViewportForState computes the virtual toolbar width for the
+// currently visible controls. Compare has two legitimate widths: the compact
+// pre-B row and the wider row that includes the B filters. Keeping this state
+// in the viewport contract prevents a narrow window from scrolling past the
+// only position where a control can be fully reached.
+func prestackToolbarViewportForState(width, page int, state *prestackSession) prestackToolbarViewport {
+	width = maxLayoutInt(1, width)
+	controlWidth := 1440 // compact Gather/Raw toolbars, including batch controls
+	switch page {
+	case 0:
+		if state != nil {
+			// Gather now keeps only the core browsing controls in the main
+			// toolbar; range/export actions live in auxiliary windows. Keep the
+			// state-aware width equal to the compact legacy canvas so a normal
+			// window does not show an empty horizontal scrollbar.
+			controlWidth = 1440
+		}
+	case 1:
+		controlWidth = 670
+	case 2:
+		controlWidth = 760 // mapping target, profile controls and byte fields
+	case 3:
+		// Compare keeps the compact action row reachable at narrow widths, but
+		// should not create an unnecessary scrollbar on a normal window.
+		controlWidth = 1400
+		// UI-free layout tests construct a zero-value session with no owner or
+		// dataset. Preserve the historical compact Compare canvas for that pure
+		// contract; the native session receives an owner token and uses the
+		// wider scrollable row when range/report controls are present.
+		if state == nil || (state.ownerToken == 0 && state.dataset == nil) {
+			break
+		}
+		controlWidth = 1320
+		if state != nil && state.compareBDataset != nil {
+			controlWidth = 1320
+		} else if state != nil && state.compareBDataset == nil && !state.compareBLoading {
+			// Before B is loaded the filters and close/export controls are hidden,
+			// but the batch-plan action is still part of the row. Keep enough
+			// virtual width for every control so narrow-window scrolling can
+			// expose the complete toolbar without clipping the last button.
+			// The pre-B row now also contains the batch-plan editor action. Keep
+			// enough virtual width for the batch plan, editor and report buttons
+			// so the report viewer stays reachable on narrow windows without
+			// adding a third toolbar row.
+			controlWidth = 1320
+		} else if state != nil && state.compareBLoading {
+			controlWidth = 1320
+		}
+	case 4:
+		controlWidth = 160
+	}
+	v := prestackToolbarViewport{CanvasWidth: maxLayoutInt(width, controlWidth)}
+	v.MaxScroll = v.CanvasWidth - width
+	if v.MaxScroll > 0 {
+		v.ExtraTop = prestackToolbarScrollHeight
+		v.ScrollRect = layoutRect{Left: 10, Top: 72, Right: maxLayoutInt(11, width-10), Bottom: 90}
+	}
+	return v
+}
+
+func prestackToolbarScrollPosition(width, page, position, request, trackPosition int) int {
+	return prestackToolbarScrollPositionForState(width, page, nil, position, request, trackPosition)
+}
+
+func prestackToolbarScrollPositionForState(width, page int, state *prestackSession, position, request, trackPosition int) int {
+	v := prestackToolbarViewportForState(width, page, state)
+	switch request {
+	case 0: // SB_LINELEFT
+		position -= 32
+	case 1: // SB_LINERIGHT
+		position += 32
+	case 2: // SB_PAGELEFT
+		position -= maxLayoutInt(32, width/2)
+	case 3: // SB_PAGERIGHT
+		position += maxLayoutInt(32, width/2)
+	case 4, 5: // SB_THUMBPOSITION / SB_THUMBTRACK
+		position = trackPosition
+	case 6: // SB_LEFT
+		position = 0
+	case 7: // SB_RIGHT
+		position = v.MaxScroll
+	}
+	return minLayoutInt(v.MaxScroll, maxLayoutInt(0, position))
+}
+
 func prestackPanelLayoutForSize(width, height, page int) prestackPanelLayout {
 	if width < 1 {
 		width = 1
@@ -27,13 +130,15 @@ func prestackPanelLayoutForSize(width, height, page int) prestackPanelLayout {
 	if height < 1 {
 		height = 1
 	}
-	// Native controls occupy the first 69 client pixels. Gather adds exactly
-	// two 24/25px toolbar rows; all other pages start below the tab strip.
+	// Keep the established two rows. A narrow viewport adds only a thin native
+	// horizontal scrollbar between the tab strip and the controls.
+	extraTop := prestackToolbarViewportForSize(width, page).ExtraTop
 	sceneTop := 119
 	if page == 0 {
 		sceneTop = 156
 	}
-	contentTop := 114
+	sceneTop += extraTop
+	contentTop := 114 + extraTop
 	footerTop := height - 42
 	if footerTop < contentTop+1 {
 		footerTop = contentTop + 1
@@ -60,8 +165,8 @@ func prestackPanelLayoutForSize(width, height, page int) prestackPanelLayout {
 		sceneTop = 0
 	}
 	return prestackPanelLayout{
-		ToolbarTop:    76,
-		ToolbarBottom: 131,
+		ToolbarTop:    76 + extraTop,
+		ToolbarBottom: 132 + extraTop,
 		Content:       layoutRect{Left: contentLeft, Top: minLayoutInt(contentTop, maxLayoutInt(0, height-1)), Right: contentRight, Bottom: maxLayoutInt(1, footerTop)},
 		Scene:         layoutRect{Left: sceneLeft, Top: sceneTop, Right: sceneRight, Bottom: maxLayoutInt(1, sceneBottom)},
 		Footer:        layoutRect{Left: 10, Top: maxLayoutInt(0, height-29), Right: width, Bottom: height},

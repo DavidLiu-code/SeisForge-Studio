@@ -764,16 +764,7 @@ func openCrookedProjectPaths(paths []string) bool {
 }
 
 func crookedPaletteBGRA(indices []byte, paletteIndex int) []byte {
-	if paletteIndex < 0 || paletteIndex >= len(legacyAnchors) {
-		paletteIndex = 2
-	}
-	anchors := legacyAnchors[paletteIndex]
-	start, middle, end := tcolor(anchors[2]), tcolor(anchors[1]), tcolor(anchors[0])
-	var palette [256]rgb
-	for i := 0; i < 128; i++ {
-		palette[i] = rgb{lerp(start.r, middle.r, i), lerp(start.g, middle.g, i), lerp(start.b, middle.b, i)}
-		palette[128+i] = rgb{lerp(middle.r, end.r, i), lerp(middle.g, end.g, i), lerp(middle.b, end.b, i)}
-	}
+	palette := paletteRGB(paletteIndex)
 	out := make([]byte, len(indices)*4)
 	for i, value := range indices {
 		color := palette[int(value)]

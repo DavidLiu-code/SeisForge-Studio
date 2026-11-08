@@ -18,6 +18,9 @@ dist/
 /.gocache*/
 exports/
 output/
+artifacts/
+# User-generated figure bundles contain local data paths and reference images.
+*.[fF][iI][gG][uU][rR][eE]/
 
 # Seismic, navigation, and generated cache data
 *.[sS][gG][yY]
@@ -27,6 +30,7 @@ output/
 *.lidx
 *.cidx
 *.ptx
+*.pidx
 
 # Runtime logs, crash output, and temporary files
 *.log

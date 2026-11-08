@@ -1,4 +1,4 @@
-# SeisForge Studio 1.10.3 架构
+# SeisForge Studio 1.10.4 架构
 
 ## 设计目标
 

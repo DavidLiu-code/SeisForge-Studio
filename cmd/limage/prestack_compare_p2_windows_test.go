@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	prestackcore "github.com/DavidLiu-code/SeisForge-Studio/internal/prestack"
@@ -28,12 +29,8 @@ func TestPrestackComparePanelContractAcrossClientSizes(t *testing.T) {
 			if l.Content.Right <= l.Content.Left || l.Content.Bottom <= l.Content.Top {
 				t.Fatalf("invalid compare content rectangle: %+v", l.Content)
 			}
-			textHeight := 112
-			if tc.w < 900 {
-				textHeight = 176
-			}
 			content := RECT{Left: int32(l.Content.Left), Top: int32(l.Content.Top), Right: int32(l.Content.Right), Bottom: int32(l.Content.Bottom)}
-			panels := prestackComparePanelRectsForContent(content, textHeight)
+			panels := prestackComparePanelRectsForContent(content, prestackCompareSummaryHeight)
 			if panels[0].Right <= panels[0].Left || panels[0].Bottom <= panels[0].Top {
 				// The UI must show an empty-state message rather than create
 				// negative/overlapping panels when the client is too small.
@@ -127,5 +124,29 @@ func TestPrestackCompareReportDoesNotContainAmplitudeOrSamples(t *testing.T) {
 		if bytes.Contains(bytes.ToLower(b), bytes.ToLower([]byte(forbidden))) {
 			t.Fatalf("report contains forbidden payload marker %q: %s", forbidden, b)
 		}
+	}
+}
+
+func TestPrestackCompareRangeValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		use  bool
+		min  float64
+		max  float64
+		want bool
+	}{
+		{name: "adaptive", use: false, min: 0, max: 0, want: true},
+		{name: "finite ascending", use: true, min: -2.5, max: 3.5, want: true},
+		{name: "equal", use: true, min: 1, max: 1, want: false},
+		{name: "descending", use: true, min: 2, max: -1, want: false},
+		{name: "nan", use: true, min: math.NaN(), max: 1, want: false},
+		{name: "infinite", use: true, min: -1, max: math.Inf(1), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := prestackCompareRangeIsValid(tc.use, tc.min, tc.max); got != tc.want {
+				t.Fatalf("valid=%v, want %v", got, tc.want)
+			}
+		})
 	}
 }

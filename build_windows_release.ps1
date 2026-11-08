@@ -1,5 +1,5 @@
 param(
-    [string]$Output = "SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe"
+    [string]$Output = "SeisForgeStudio_v1.10.4_compare_x64.exe"
 )
 
 $ErrorActionPreference = "Stop"

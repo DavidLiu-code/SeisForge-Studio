@@ -2,7 +2,7 @@
 
 ## Scope
 
-Version 1.10.3 adds metadata-only quality control and acquisition-point linkage to the independent Prestack workspace. Ordinary 2D, crooked 2D, true 3D, pseudo-3D and SEG-Y analysis keep their existing readers, amplitude mapping, palettes and parameter files.
+Version 1.10.4-rc1 carries metadata-only quality control, acquisition-point linkage and read-only Compare support in the independent Prestack workspace. Ordinary 2D, crooked 2D, true 3D, pseudo-3D and SEG-Y analysis keep their existing readers, amplitude mapping, palettes and parameter files.
 
 ## Data flow
 

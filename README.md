@@ -6,7 +6,7 @@
 **Seismic Visualization, Reconstruction & Enhancement**<br>
 **震铸地震数据处理平台**
 
-SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与轻量分析工具。当前版本为 **1.10.3**，提供常规二维剖面、规则三维体、二维叠后弯线项目、伪三维幕布、叠前道集/QC 和只读 SEG-Y 文件分析。
+SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与轻量分析工具。当前正式版本为 **1.10.4**，提供常规二维剖面、规则三维体、二维叠后弯线项目、伪三维幕布、叠前道集/QC、只读 A/B Compare 和 SEG-Y 文件分析。
 
 > 项目此前使用 **Limage** 名称。历史版本文档中的 Limage/Fimage 名称为开发沿革记录；当前产品名称统一为 **SeisForge Studio**。
 
@@ -31,6 +31,8 @@ SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与�
 4. 规则三维数据首次打开时会建立几何索引，界面显示识别、索引和首个切片的进度。
 5. 在二维、弯线二维或三维的 2D Full View 中启用“道”，单击剖面查看单道波形、频谱和头信息。
 
+当前正式版下载：[SeisForge Studio v1.10.4 Releases](https://github.com/DavidLiu-code/SeisForge-Studio/releases/tag/v1.10.4)
+
 详细操作见[中文用户指南](docs/USER_GUIDE.zh-CN.md)和[快捷键表](docs/SHORTCUTS.md)。
 
 ## 数据支持与边界
@@ -51,6 +53,8 @@ SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与�
 - [兼容性与旧名称迁移](docs/COMPATIBILITY.md)
 - [构建与验证](docs/BUILDING.md)
 - [1.10.3 发布说明](docs/releases/v1.10.3.md)
+- [1.10.4-rc1 Compare 候选说明](docs/releases/v1.10.4-rc1.md)
+- [1.10.4 发布说明](docs/releases/v1.10.4.md)
 - [版本记录](CHANGELOG.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
 - [历史工程文档索引](docs/history/README.md)
@@ -61,14 +65,14 @@ SeisForge Studio 是面向 Windows x64 的原生 SEG-Y 浏览、质量检查与�
 
 ```powershell
 go test ./... -count=1
-.\build_windows_release.cmd -Output SeisForgeStudio_v1.10.3_azimuth_wiggle_x64.exe
+.\build_windows_release.cmd -Output SeisForgeStudio_v1.10.4_compare_x64.exe
 ```
 
 发布脚本使用 `-H=windowsgui` 构建，并校验 PE Subsystem 为 Windows GUI，双击启动不会附带控制台窗口。
 
 ## 兼容性说明
 
-为继续读取既有用户配置、索引和许可证，1.10.3 暂时保留 `%LOCALAPPDATA%\Limage` 以及旧缓存内部标识。不要仅因产品改名手工移动或重命名这些文件。详情见[兼容性说明](docs/COMPATIBILITY.md)。
+为继续读取既有用户配置、索引和许可证，1.10.4 暂时保留 `%LOCALAPPDATA%\Limage` 以及旧缓存内部标识。不要仅因产品改名手工移动或重命名这些文件。详情见[兼容性说明](docs/COMPATIBILITY.md)。
 
 ## 许可与反馈
 

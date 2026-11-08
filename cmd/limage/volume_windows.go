@@ -1200,7 +1200,7 @@ func handleVolumeShortcut(key uintptr) bool {
 	return false
 }
 
-var volumePaletteOrder = []int{1, 2, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+var volumePaletteOrder = []int{1, 2, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, industrialPaletteIndex}
 
 func volumePaletteComboIndex(palette int) int {
 	for i, p := range volumePaletteOrder {
@@ -2304,18 +2304,7 @@ func drawVolumeCubeStatic(hdc uintptr) {
 }
 
 func volumePalette() [256]rgb {
-	idx := volumePaletteIndex
-	if idx < 0 || idx >= len(legacyAnchors) {
-		idx = 2
-	}
-	a := legacyAnchors[idx]
-	start, mid, end := tcolor(a[2]), tcolor(a[1]), tcolor(a[0])
-	var p [256]rgb
-	for i := 0; i < 128; i++ {
-		p[i] = rgb{lerp(start.r, mid.r, i), lerp(start.g, mid.g, i), lerp(start.b, mid.b, i)}
-		p[128+i] = rgb{lerp(mid.r, end.r, i), lerp(mid.g, end.g, i), lerp(mid.b, end.b, i)}
-	}
-	return p
+	return paletteRGB(volumePaletteIndex)
 }
 
 func volumePaletteBGRA(idx []byte) []byte {

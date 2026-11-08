@@ -36,7 +36,9 @@ type GeometryIndex struct {
 	Poststack       bool
 
 	denseGrid []int32
-	prepOnce  sync.Once
+	// prepOnce is a pointer so copying a GeometryIndex does not copy a lock.
+	// It is initialized for every newly built index and lazily after gob decode.
+	prepOnce *sync.Once
 }
 
 type GeometryBuildStats struct {
@@ -406,7 +408,7 @@ func (s *File) tryBuildRegularGeometry(inlineByte, crosslineByte int, progress f
 	st, _ := s.f.Stat()
 	idx := &GeometryIndex{SourcePath: s.Info.Path, FileSize: s.Info.FileSize, TraceCount: n, InlineByte: inlineByte, CrosslineByte: crosslineByte,
 		InlineValues: ilVals, CrosslineValues: xlVals, TraceNumbers: traces, RowOfTrace: rows, ColOfTrace: cols,
-		ValidTraceCount: n, DuplicateCount: 0, Poststack: true}
+		ValidTraceCount: n, DuplicateCount: 0, Poststack: true, prepOnce: &sync.Once{}}
 	if st != nil {
 		idx.ModTimeUnixNano = st.ModTime().UnixNano()
 	}
@@ -593,7 +595,7 @@ func (s *File) BuildGeometryIndexCachedProgress(inlineByte, crosslineByte, worke
 		InlineValues: ilVals, CrosslineValues: xlVals, TraceNumbers: traces, RowOfTrace: rows, ColOfTrace: cols,
 		ValidTraceCount: validCount, DuplicateCount: duplicates,
 		// Post-stack volumes should have roughly one trace per IL/XL bin.
-		Poststack: duplicateRatio <= 0.10,
+		Poststack: duplicateRatio <= 0.10, prepOnce: &sync.Once{},
 	}
 	idx.prepare()
 	saveGeometryCache(cp, idx)
@@ -606,6 +608,10 @@ func (s *File) BuildGeometryIndexCachedProgress(inlineByte, crosslineByte, worke
 func (g *GeometryIndex) prepare() {
 	if g == nil {
 		return
+	}
+	if g.prepOnce == nil {
+		// Gob omits unexported fields, so cached indexes need a fresh guard.
+		g.prepOnce = &sync.Once{}
 	}
 	g.prepOnce.Do(func() {
 		rows, cols := len(g.InlineValues), len(g.CrosslineValues)

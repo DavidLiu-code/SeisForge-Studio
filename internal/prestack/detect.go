@@ -20,6 +20,7 @@ type MappingCandidate struct {
 type MappingDetection struct {
 	Mapping           HeaderMapping
 	Candidates        []MappingCandidate
+	SampledTraces     int
 	Confidence        float64
 	NeedsConfirmation bool
 	Warnings          []string
@@ -97,7 +98,7 @@ func DetectHeaderMapping(ctx context.Context, reader *segy.File) (MappingDetecti
 	source := candidate("source", 9)
 	receiver := candidate("receiver", 13)
 	offset := candidate("offset", 37)
-	result := MappingDetection{Mapping: m, Candidates: []MappingCandidate{source, receiver, cdp, offset, inline, crossline}}
+	result := MappingDetection{Mapping: m, Candidates: []MappingCandidate{source, receiver, cdp, offset, inline, crossline}, SampledTraces: len(traces)}
 	for i := range result.Candidates {
 		result.Candidates[i].Explanation = "有限道头样本覆盖率与唯一值数量"
 	}

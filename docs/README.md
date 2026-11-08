@@ -1,15 +1,21 @@
 # SeisForge Studio 文档
 
-本目录提供 SeisForge Studio 1.10.3 的使用、构建、架构和兼容性说明。
+本目录提供 SeisForge Studio 1.10.4 的使用、构建、架构和兼容性说明。
 
 ## 使用者
 
 - [中文用户指南](USER_GUIDE.zh-CN.md)：从打开数据到二维、三维、弯线和 SEG-Y 分析的完整流程。
 - [快捷键与鼠标操作](SHORTCUTS.md)：二维、弯线、真三维和伪三维交互速查。
+- [生成叠前绘图代码](PRESTACK_FIGURE_REPLAY.md)：Gather / Compare 配方、一键复绘和像素一致性校验。
+- [叠前批量复现](PRESTACK_BATCH_REPLAY.md)：编排 Figure Recipe、流程快照和 QC 报告任务。
+- [叠前 Mapping Profile](PRESTACK_MAPPING_PROFILES.md)：保存、校验和切换 A/B 道头映射。
+- [叠前流程快照](PRESTACK_SESSION_SNAPSHOT.md)：保存和恢复 Gather、Compare、QC、Geometry、Mapping 状态。
 - [兼容性说明](COMPATIBILITY.md)：旧 Limage 设置、缓存、Recent 和许可证的保留策略。
 - [1.10.0 发布说明](releases/v1.10.0.md)：叠前独立工作区、道头索引、道集与 Geometry 使用说明。
 - [1.10.2 发布说明](releases/v1.10.2.md)：原始叠前道序、范围读取和窗口调整稳定性。
 - [1.10.3 发布说明](releases/v1.10.3.md)：叠前 QC、异步稳定性和震源—检波点联动。
+- [1.10.4-rc1 候选说明](releases/v1.10.4-rc1.md)：只读叠前 A/B Compare、synthetic SEG-Y 验收和发布门禁。
+- [1.10.4 发布说明](releases/v1.10.4.md)：叠前 A/B Compare 稳定版、工业色标和匹配增强。
 - [原始叠前道序架构](architecture/ARCHITECTURE_PRESTACK_RAW_ORDER.md)：物理道序、范围、代次和窗口尺寸生命周期。
 - [版本记录](../CHANGELOG.md)：1.9.x–1.10.x 用户可见变化。
 

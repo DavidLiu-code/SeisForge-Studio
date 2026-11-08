@@ -84,6 +84,25 @@ type CompareMatchReportRow struct {
 	BMetadata      *CompareTraceMetadata `json:"b_metadata,omitempty"`
 }
 
+// MarshalJSON preserves physical trace zero on a present side, while leaving
+// the absent side out of an unmatched row. An int64 with omitempty alone loses
+// the first physical trace because reports use zero-based trace numbers.
+func (r CompareMatchReportRow) MarshalJSON() ([]byte, error) {
+	type alias CompareMatchReportRow
+	var aTrace, bTrace *int64
+	if r.ATrace != 0 || r.Classification == "matched" || r.Classification == "a_only" || r.Classification == "ambiguous_a" || r.Classification == "invalid_a" {
+		aTrace = &r.ATrace
+	}
+	if r.BTrace != 0 || r.Classification == "matched" || r.Classification == "b_only" || r.Classification == "ambiguous_b" || r.Classification == "invalid_b" {
+		bTrace = &r.BTrace
+	}
+	return json.Marshal(struct {
+		alias
+		ATrace *int64 `json:"a_trace,omitempty"`
+		BTrace *int64 `json:"b_trace,omitempty"`
+	}{alias: alias(r), ATrace: aTrace, BTrace: bTrace})
+}
+
 // CompareMatchReportOptions supplies provenance fields that are not part of
 // the match algorithm itself.
 type CompareMatchReportOptions struct {

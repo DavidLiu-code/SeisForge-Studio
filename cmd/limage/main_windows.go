@@ -48,6 +48,7 @@ var (
 	pGetWindowTextLen         = user32.NewProc("GetWindowTextLengthW")
 	pSendMessageW             = user32.NewProc("SendMessageW")
 	pMoveWindow               = user32.NewProc("MoveWindow")
+	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	pEnableWindow             = user32.NewProc("EnableWindow")
 	pDestroyWindow            = user32.NewProc("DestroyWindow")
 	pSetForeground            = user32.NewProc("SetForegroundWindow")
@@ -140,6 +141,7 @@ const (
 	CW_USEDEFAULT       = 0x80000000
 	SW_HIDE             = 0
 	SW_SHOW             = 5
+	SW_SHOWNA           = 8
 	SW_RESTORE          = 9
 	COLOR_WINDOW        = 5
 	COLOR_BTNFACE       = 15
@@ -269,7 +271,7 @@ const (
 	ID_VOLUME  = 1014
 
 	APP_NAME        = "SeisForge Studio"
-	APP_VERSION     = "1.10.3"
+	APP_VERSION     = "1.10.4"
 	APP_PROJECT_URL = "https://github.com/DavidLiu-code/SeisForge-Studio"
 
 	IDP_OK       = 2001
@@ -443,6 +445,7 @@ const (
 var paletteNames = []string{
 	"红灰青", "白灰黑", "黑灰白", "蓝灰红", "蓝灰褐1", "绿灰褐1", "蓝灰褐2", "绿灰褐2", "蓝灰橙", "绿灰橙",
 	"绿灰褐3", "蓝灰褐3", "蓝黄褐", "绿灰红", "红黄蓝", "红蓝黄", "黄红绿", "绿红蓝", "灰黄橙", "灰绿黄",
+	"工业蓝白红",
 }
 
 var legacyAnchors = [20][3]uint32{
@@ -878,19 +881,7 @@ func displayModeLabel(m segy.DisplayMode) string {
 }
 
 func currentPalette() [256]rgb {
-	idx := paletteIndex
-	if idx < 0 || idx >= len(legacyAnchors) {
-		idx = 2
-	}
-	a := legacyAnchors[idx]
-	// The original table is stored end/mid/start; routine 0x408610 reverses it.
-	start, mid, end := tcolor(a[2]), tcolor(a[1]), tcolor(a[0])
-	var p [256]rgb
-	for i := 0; i < 128; i++ {
-		p[i] = rgb{lerp(start.r, mid.r, i), lerp(start.g, mid.g, i), lerp(start.b, mid.b, i)}
-		p[128+i] = rgb{lerp(mid.r, end.r, i), lerp(mid.g, end.g, i), lerp(mid.b, end.b, i)}
-	}
-	return p
+	return paletteRGB(paletteIndex)
 }
 func applyPalette() {
 	if len(indices) == 0 {
@@ -1904,6 +1895,15 @@ func maxInt64(a, b int64) int64 {
 }
 
 func main() {
+	// Metadata-only batch plans run before any interactive windows are created.
+	if handled, code := handlePrestackBatchCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+	// Recipe replay has its own off-screen renderer and license check. Dispatch
+	// it before creating any interactive windows or interpreting a file argument.
+	if handled, code := handlePrestackFigureCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	runtime.LockOSThread()
 	icc := INITCOMMONCONTROLSEX{DwSize: uint32(unsafe.Sizeof(INITCOMMONCONTROLSEX{})), DwICC: ICC_WIN95_CLASSES}
 	pInitCommonCtrls.Call(uintptr(unsafe.Pointer(&icc)))
@@ -1927,6 +1927,8 @@ func main() {
 	registerClass("Limage64Spectrum", syscall.NewCallback(spectrumWndProc), COLOR_WINDOW+1, hinst, cursor)
 	registerClass("Limage64TraceAnalysis", syscall.NewCallback(traceAnalysisWndProc), COLOR_WINDOW+1, hinst, cursor)
 	registerClass("Limage64License", syscall.NewCallback(licenseWndProc), COLOR_BTNFACE+1, hinst, cursor)
+	registerClass("Limage64PrestackBatchEditor", syscall.NewCallback(prestackBatchEditorWndProc), COLOR_BTNFACE+1, hinst, cursor)
+	registerClass("Limage64PrestackExecutionReport", syscall.NewCallback(prestackExecutionReportWndProc), COLOR_BTNFACE+1, hinst, cursor)
 	if !ensureActivated(hinst) {
 		return
 	}
@@ -1958,6 +1960,7 @@ func main() {
 		if int32(r) <= 0 {
 			break
 		}
+		observePrestackCompareControlKey(m.Hwnd, m.Message, m.WParam)
 		// These windows are reconstructed as ordinary top-level Win32 windows,
 		// not dialog resources. Intercept Enter/Esc here so the behavior matches
 		// the original VCL dialogs even while an EDIT control has keyboard focus.
@@ -2027,7 +2030,7 @@ func main() {
 				// ComboLBox is an owned top-level popup, so the owner/foreground
 				// checks above classify it as Prestack.  Leave its keys alone while
 				// any native combo reports an open drop list.
-				if prestackKeys && !prestackComboDropdownOpen() && handlePrestackShortcut(m.WParam) {
+				if prestackKeys && !prestackTextInput(m.Hwnd) && !prestackComboDropdownOpen() && handlePrestackShortcut(m.WParam) {
 					continue
 				}
 			}
