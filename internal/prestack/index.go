@@ -664,9 +664,17 @@ func (p *PrestackIndex) Gather(selection GatherSelection) (GatherResult, error) 
 		if rawEnd <= rawStart {
 			return GatherResult{}, errors.New("raw trace range is empty")
 		}
-		records = make([]int, int(rawEnd-rawStart))
+		rawStartInt, err := CheckedInt64ToInt(rawStart)
+		if err != nil {
+			return GatherResult{}, fmt.Errorf("raw trace range start is not representable: %w", err)
+		}
+		rawCount, err := CheckedInt64ToInt(rawEnd - rawStart)
+		if err != nil {
+			return GatherResult{}, fmt.Errorf("raw trace range length is not representable: %w", err)
+		}
+		records = make([]int, rawCount)
 		for i := range records {
-			records[i] = int(rawStart) + i
+			records[i] = rawStartInt + i
 		}
 		selection.Key = GatherKey{Raw: true}
 		selection.Sort = SortPhysical

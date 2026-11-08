@@ -993,8 +993,17 @@ func prestackSampleRangeFromControls(ns int) (int, int, int, error) {
 		v0--
 		v1--
 	}
-	s0 = clampInt(int(v0), 0, maxInt(0, ns-1))
-	s1 = clampInt(int(v1), 0, maxInt(0, ns-1))
+	maxSample := int64(maxInt(0, ns-1))
+	v0, v1 = clampInt64(v0, 0, maxSample), clampInt64(v1, 0, maxSample)
+	var convertErr error
+	s0, convertErr = prestackcore.CheckedInt64ToInt(v0)
+	if convertErr != nil {
+		return 0, 0, modeValue, errors.New("样点起始值超出系统整数范围")
+	}
+	s1, convertErr = prestackcore.CheckedInt64ToInt(v1)
+	if convertErr != nil {
+		return 0, 0, modeValue, errors.New("样点结束值超出系统整数范围")
+	}
 	if s0 > s1 {
 		s0, s1 = s1, s0
 	}
@@ -1237,8 +1246,19 @@ func applyPrestackRawRange() {
 			v0--
 			v1--
 		}
-		s0 = clampInt(int(v0), 0, maxInt(0, ns-1))
-		s1 = clampInt(int(v1), 0, maxInt(0, ns-1))
+		maxSample := int64(maxInt(0, ns-1))
+		v0, v1 = clampInt64(v0, 0, maxSample), clampInt64(v1, 0, maxSample)
+		var convertErr error
+		s0, convertErr = prestackcore.CheckedInt64ToInt(v0)
+		if convertErr != nil {
+			message(prestackHwnd, "原始叠前道序", "样点起始值超出系统整数范围。", MB_OK|MB_ICONERROR)
+			return
+		}
+		s1, convertErr = prestackcore.CheckedInt64ToInt(v1)
+		if convertErr != nil {
+			message(prestackHwnd, "原始叠前道序", "样点结束值超出系统整数范围。", MB_OK|MB_ICONERROR)
+			return
+		}
 		if s0 > s1 {
 			s0, s1 = s1, s0
 		}
