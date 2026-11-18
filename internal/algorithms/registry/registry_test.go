@@ -49,7 +49,11 @@ func TestDiscoveryPassiveAbsentAndDefensive(t *testing.T) {
 		t.Fatal("unstable discovery ordering")
 	}
 	m, ok := r.Get("demo.z")
-	if !ok || m.ManifestPath() != path || m.Fingerprint() == "" {
+	wantPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || m.ManifestPath() != wantPath || m.Fingerprint() == "" {
 		t.Fatal("missing discovered identity")
 	}
 	d := m.Descriptor()

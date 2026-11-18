@@ -141,8 +141,43 @@ func displayEditorMeasureWrapped(w *displayEditor, id, width, minimum, maximum i
 	return max(minimum, min(maximum, int(r.Bottom-r.Top)+4))
 }
 
+type displayRangePreviewText struct {
+	heading, bounds, detail RECT
+}
+
+// Reserve space using the same font as the painter. On a short card the
+// form above already reports the mapped endpoints; keep the graph, drag
+// handles and the data-span labels rather than reserving a second help row.
+func displayEditorColorRangePreview(p RECT, dpi, textHeight int) (graph, strip RECT, text displayRangePreviewText) {
+	px := func(v int) int32 { return int32(displayPixelDIP(float64(v), dpi)) }
+	line := max(px(14), int32(textHeight))
+	left, right := p.Left+px(10), p.Right-px(10)
+	topPad, gap, stripHeight, labelOffset := px(10), px(5), px(12), px(14)
+	footer := labelOffset + 2*line + px(5)
+	help := true
+	if p.Bottom-p.Top-topPad-gap-stripHeight-footer < line+px(12) {
+		topPad, gap, stripHeight, labelOffset = px(6), px(3), px(10), px(11)
+		footer = labelOffset + line + px(4)
+		help = false
+	}
+	top := p.Top + topPad
+	height := min(px(200), p.Bottom-top-footer-stripHeight-gap)
+	if right <= left || height <= line+1 {
+		return
+	}
+	graph = RECT{Left: left, Right: right, Top: top, Bottom: top + height}
+	strip = RECT{Left: left, Right: right, Top: graph.Bottom + gap, Bottom: graph.Bottom + gap + stripHeight}
+	text.heading = RECT{Left: left + px(5), Right: right, Top: top + 1, Bottom: top + 1 + line}
+	text.bounds = RECT{Left: left, Right: right, Top: strip.Bottom + labelOffset, Bottom: strip.Bottom + labelOffset + line}
+	if help {
+		text.detail = RECT{Left: left, Right: right, Top: text.bounds.Bottom + 1, Bottom: text.bounds.Bottom + 1 + line}
+	}
+	return
+}
+
 // The exact same rectangles feed paint, hover and gesture hit testing.
-func displayEditorLayoutPreview(w *displayEditor, dpi int) {
+func displayEditorLayoutPreview(w *displayEditor, dpi, textHeight int) {
+	w.rangePreviewText = displayRangePreviewText{}
 	p := w.preview
 	if p.Right <= p.Left || p.Bottom <= p.Top {
 		w.preview = RECT{}
@@ -151,25 +186,18 @@ func displayEditorLayoutPreview(w *displayEditor, dpi int) {
 	pad := int32(displayPixelDIP(10, dpi))
 	px := func(v int) int32 { return int32(displayPixelDIP(float64(v), dpi)) }
 	left, right := p.Left+pad, p.Right-pad
-	if w.pageColor && (w.section == displayPageRange || w.section == displayPageGradient) {
-		footer, strip, gap := px(54), px(12), px(5)
-		if w.section == displayPageGradient {
-			footer, gap = px(41), px(23)
-		}
+	if w.pageColor && w.section == displayPageRange {
+		w.graph, w.gradient, w.rangePreviewText = displayEditorColorRangePreview(p, dpi, textHeight)
+	} else if w.pageColor && w.section == displayPageGradient {
+		footer, strip, gap := px(41), px(12), px(23)
 		top := p.Top + pad
-		maxHistogram := px(200)
-		if w.section == displayPageGradient {
-			maxHistogram = px(108)
-		}
-		histogram := min(maxHistogram, p.Bottom-top-footer-strip-gap)
+		histogram := min(px(108), p.Bottom-top-footer-strip-gap)
 		if right <= left || histogram <= 0 {
 			return
 		}
 		w.graph = RECT{Left: left, Right: right, Top: top, Bottom: top + histogram}
 		w.gradient = RECT{Left: left, Right: right, Top: w.graph.Bottom + gap, Bottom: w.graph.Bottom + gap + strip}
-		if w.section == displayPageGradient {
-			w.nodeBand = RECT{Left: left - pad/2, Right: right + pad/2 + 1, Top: w.gradient.Bottom + px(3), Bottom: w.gradient.Bottom + px(17)}
-		}
+		w.nodeBand = RECT{Left: left - pad/2, Right: right + pad/2 + 1, Top: w.gradient.Bottom + px(3), Bottom: w.gradient.Bottom + px(17)}
 	} else if !w.pageColor && w.section == displayPageRange {
 		dc, releaseDC := displayMeasurementDC(w.body)
 		defer releaseDC()
@@ -563,7 +591,7 @@ func displayEditorRangeHit(w *displayEditor, x, y int) (displayEditorRangeTarget
 	}
 	top, bottom := int(b.Top)-tolerance/2, int(b.Bottom)+tolerance
 	if w.pageColor {
-		top = max(int(w.graph.Top)+displayPixelDIP(19, dpi), int(w.graph.Top))
+		top = int(w.rangePreviewText.heading.Bottom)
 	}
 	if y < top || y > bottom {
 		return hit, false

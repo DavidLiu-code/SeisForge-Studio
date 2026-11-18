@@ -64,7 +64,11 @@ func TestPackDiscoveryReadsBoundedMembersAlongsideLegacy(t *testing.T) {
 	first, ok := r.Get("pack.first")
 	second, _ := r.Get("pack.second")
 	legacy, _ := r.Get("unrelated.module")
-	if !ok || first.PackID() != "test.pack" || first.PackVersion() != "1.2.3" || first.PackManifestPath() != marker ||
+	wantMarker, err := filepath.EvalSymlinks(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || first.PackID() != "test.pack" || first.PackVersion() != "1.2.3" || first.PackManifestPath() != wantMarker ||
 		first.ExecutablePath() != second.ExecutablePath() || first.Fingerprint() == second.Fingerprint() ||
 		first.Verify() != nil || second.Verify() != nil || legacy.PackManifestPath() != "" {
 		t.Fatalf("unexpected package/member identities: %v, %v, %v", first, second, legacy)
@@ -143,6 +147,19 @@ func TestPackRejectsSymlinkedMemberEvenInsidePackageDirectory(t *testing.T) {
 	writePack(t, root, "first.json", "linked.json")
 	if modules, err := LoadPackManifest(context.Background(), marker, "1.10.4"); err == nil || len(modules) != 0 {
 		t.Fatal("symlinked package member accepted")
+	}
+}
+
+func TestPackRejectsSymlinkedAncestor(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	makePack(t, filepath.Join(realDir, "pack"))
+	link := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlink fixture unavailable: %v", err)
+	}
+	if modules, err := LoadPackManifest(context.Background(), filepath.Join(link, "pack", PackManifestName), "1.10.4"); err == nil || len(modules) != 0 {
+		t.Fatal("package below a symlinked ancestor was accepted")
 	}
 }
 

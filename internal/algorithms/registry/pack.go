@@ -55,7 +55,7 @@ func realPackPath(path string, dir bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !equalPackPath(resolved, path) {
+	if !equalPackPath(resolved, path) && !isPackPathSpellingAlias(path, resolved) {
 		return "", errors.New("algorithm package paths cannot traverse symlinks")
 	}
 	return resolved, nil

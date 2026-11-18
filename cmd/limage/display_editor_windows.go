@@ -123,6 +123,7 @@ type displayEditor struct {
 	unit                                  displaycore.Axis
 	graph, gradient                       RECT
 	preview, nodeBand                     RECT
+	rangePreviewText                      displayRangePreviewText
 	topTabs, subTabs                      []int
 	tabSections                           [2]int
 	gestureDraft                          *displayDraft
@@ -1686,7 +1687,7 @@ func displayLayoutEditorAtDPI(w *displayEditor, dpi int) {
 			w.preview.Left = w.preview.Right - int32(min(fullWidth, px(260)))
 		}
 	}
-	displayEditorLayoutPreview(w, dpi)
+	displayEditorLayoutPreview(w, dpi, m.line)
 	w.scroll, w.scrollMax = 0, 0
 	for id, h := range w.controls {
 		if id == deTopTabs || id >= deReset && id <= deApplyPanels || visible[id] {
@@ -2480,6 +2481,10 @@ func displayEditorPaint(w *displayEditor, dc uintptr) {
 	pSetBkMode.Call(dc, TRANSPARENT)
 	pSetTextColor.Call(dc, rgbRef(38, 54, 74))
 	displayFill(dc, g, displaycore.RGB{R: 244, G: 247, B: 252})
+	barsTop := g.Top + px(20)
+	if !gradientPage {
+		barsTop = w.rangePreviewText.heading.Bottom
+	}
 	bins := d.Bins(rangeValue, 64)
 	highest := uint64(1)
 	for _, n := range bins {
@@ -2488,7 +2493,7 @@ func displayEditorPaint(w *displayEditor, dc uintptr) {
 	for i, n := range bins {
 		if n > 0 {
 			left, right := g.Left+int32(i)*(g.Right-g.Left)/64, g.Left+int32(i+1)*(g.Right-g.Left)/64
-			height := int32(float64(n) / float64(highest) * float64(max(1, g.Bottom-g.Top-px(20))))
+			height := int32(float64(n) / float64(highest) * float64(max(1, g.Bottom-barsTop)))
 			displayFill(dc, RECT{Left: left, Right: max(left+1, right-1), Top: g.Bottom - height, Bottom: g.Bottom}, displaycore.RGB{R: 107, G: 149, B: 197})
 		}
 	}
@@ -2528,7 +2533,7 @@ func displayEditorPaint(w *displayEditor, dc uintptr) {
 		return displayEditorRangePixel(bar, rangeValue, v)
 	}
 	line := func(x int, color displaycore.RGB) {
-		displayFill(dc, RECT{Left: int32(x - 1), Right: int32(x + 1), Top: g.Top + px(19), Bottom: bar.Bottom}, color)
+		displayFill(dc, RECT{Left: int32(x - 1), Right: int32(x + 1), Top: barsTop, Bottom: bar.Bottom}, color)
 	}
 	if rangeValue.Min <= 0 && rangeValue.Max >= 0 {
 		line(pixel(0), displaycore.RGB{R: 90, G: 104, B: 126})
@@ -2560,12 +2565,14 @@ func displayEditorPaint(w *displayEditor, dc uintptr) {
 	} else if w.section == displayPageGradient {
 		label = "渐变编辑 · " + label
 	}
-	drawAxisText(dc, label, int(g.Left+px(5)), int(g.Top+1), int(g.Right), int(g.Top+px(19)), DT_LEFT)
+	drawLabel := func(text string, r RECT, flags uint32) {
+		drawAxisText(dc, text, int(r.Left), int(r.Top), int(r.Right), int(r.Bottom), flags)
+	}
+	drawLabel(label, w.rangePreviewText.heading, DT_LEFT)
 	lo, hi := displaycore.FormatCompactNumber(rangeValue.Min), displaycore.FormatCompactNumber(rangeValue.Max)
-	labelY := bar.Bottom + px(14)
-	drawAxisText(dc, "显示跨度  "+lo, int(g.Left), int(labelY), int(g.Right), int(labelY+px(18)), DT_LEFT)
-	drawAxisText(dc, hi, int(g.Left), int(labelY), int(g.Right), int(labelY+px(18)), DT_RIGHT)
-	if w.section == displayPageRange {
+	drawLabel("显示跨度  "+lo, w.rangePreviewText.bounds, DT_LEFT)
+	drawLabel(hi, w.rangePreviewText.bounds, DT_RIGHT)
+	if w.rangePreviewText.detail.Bottom > w.rangePreviewText.detail.Top {
 		help := "两端缩放；蓝色区间平移。"
 		switch {
 		case displayEditorColorRangeLocked(w):
@@ -2579,7 +2586,7 @@ func displayEditorPaint(w *displayEditor, dc uintptr) {
 		if !w.rangeDragging {
 			actual += "  ·  " + help
 		}
-		drawAxisText(dc, actual, int(g.Left), int(bar.Bottom+px(32)), int(g.Right), int(bar.Bottom+px(52)), DT_LEFT)
+		drawLabel(actual, w.rangePreviewText.detail, DT_LEFT)
 	}
 }
 

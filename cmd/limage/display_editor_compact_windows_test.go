@@ -156,6 +156,23 @@ func TestDisplayEditorLongTitleHoverAndWorkArea(t *testing.T) {
 	}
 }
 
+func TestDisplayEditorRangePreviewRetainsChartWithTallFont(t *testing.T) {
+	// The Windows CI runner gave the manual-range pane this 150%-DPI card.
+	// Reproduce the short client area independently of the installed UI font.
+	card := RECT{Left: 18, Top: 466, Right: 800, Bottom: 580}
+	g, bar, labels := displayEditorColorRangePreview(card, 144, 29)
+	if g.Bottom <= labels.heading.Bottom || bar.Top <= g.Bottom || bar.Bottom <= bar.Top ||
+		labels.bounds.Top <= bar.Bottom || labels.bounds.Bottom > card.Bottom ||
+		labels.bounds.Bottom-labels.bounds.Top != 29 || labels.detail != (RECT{}) {
+		t.Fatalf("chart, strip and full-size labels do not fit the compact card: graph=%+v strip=%+v labels=%+v", g, bar, labels)
+	}
+	card.Bottom += 180
+	g, bar, labels = displayEditorColorRangePreview(card, 144, 29)
+	if g.Bottom <= labels.heading.Bottom || labels.detail.Top <= labels.bounds.Bottom || labels.detail.Bottom > card.Bottom {
+		t.Fatalf("normal card did not restore range help: graph=%+v strip=%+v labels=%+v", g, bar, labels)
+	}
+}
+
 func TestDisplayEditorTwoNativeStripsMatchContent(t *testing.T) {
 	w, _ := displayNativeEditorPoststackProfiles(t, false)
 	e := displayEditorSurface(w)
