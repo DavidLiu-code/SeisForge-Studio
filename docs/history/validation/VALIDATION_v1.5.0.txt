@@ -1,0 +1,7 @@
+Limage v1.5.0 validation
+========================
+Linux unit tests: go test ./... => PASS
+Windows build: GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui => PASS
+Binary type: PE32+ executable for MS Windows 6.01 (GUI), x86-64
+SHA-256: 9c878683ae4ceaf58a5d05c6fed4388af5ac2f9ac354ac4febf6ed959311be5e
+Note: Windows GUI interaction must be visually validated on Windows hardware.

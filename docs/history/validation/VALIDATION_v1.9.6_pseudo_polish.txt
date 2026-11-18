@@ -1,0 +1,50 @@
+Limage v1.9.6 Phase 8 validation
+================================
+
+Baseline
+--------
+External backup:
+  <external-baseline-backup>
+SHA-256:
+  dc746afafd2df6708c8547b24828d4826c3a76e2ccabbd5acce67f0b32eec374
+
+Automated regression
+--------------------
+Command: go test ./... -count=1
+Result: PASS for cmd/limage and every internal package.
+
+Phase 8 coverage verifies:
+- the persistent blue pseudo AOI paints before the independent pale one-pixel
+  Geometry zoom preview and is not hidden by a mutually exclusive branch;
+- plain double-click routes through retained Z-buffer picking while camera
+  rotation/pan begins only after a five-pixel movement threshold;
+- progress text explicitly reports prepare, load, refine, success, and partial
+  failure states, with a full 100-percent completion result;
+- Clean, CIGVis, Interpretation, and Standard selectors are present in the
+  pseudo toolbar, synchronize with Crooked Geometry, and do not open Readers.
+
+Provided survey acceptance
+--------------------------
+Survey: %SEISFORGE_TEST_CROOKED_PROJECT_DIR%
+Result: PASS.
+- 62 valid SEG-Y datasets and 62 DAT navigation matches were retained.
+- Central AOI loaded 33/62 lines as 33 clipped curtain segments.
+- Indexed texture use was 51,904,512 bytes, below the 192 MiB budget.
+- Full-project pseudo acceptance loaded and depth-rendered all 62 curtains.
+- Existing project multiplier and calibration behavior remained unchanged.
+
+Frozen regression
+-----------------
+cmd/limage/volume_windows.go is byte-identical to the Phase 8 baseline:
+  f17a613553ec16b82bfb27c3def2aee3cea0460aba2e41576220753ebfdc2cff
+
+No volume renderer, volume camera, volume_view.json v1, crooked_view.json v1,
+pseudo_view.json v2, crooked_style.json v1 schema, palette ordering, gain/clip,
+.lidx, or .cidx format was changed.
+
+Release
+-------
+Executable: Limage_v1.9.6_pseudo_polish_x64.exe
+Bytes: 4,304,896
+PE Subsystem: Windows GUI (2)
+SHA-256: e22c1d95582d705b2fe722bb35465224577079d1cfe301a6a926e6a128f8e94e

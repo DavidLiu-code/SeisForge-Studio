@@ -1,0 +1,35 @@
+Limage v1.9.0 Phase 1.2 entry mapping validation
+Date: 2026-08-24
+
+Observed failure:
+  Home card "二维剖面" opened the automatic/3-D route.
+  Home card "三维数据体" opened the 2-D route.
+
+Root cause:
+  WM_DROPFILES and workspace modes shared one iota declaration. Because
+  WM_DROPFILES consumed iota=0, the intended persisted workspace values
+  1/2/3 became 2/3/4. Home cards still passed cardIndex+1 (1/2/3), reversing
+  the first two entries and misrouting Crooked.
+
+Fix:
+  WM_DROPFILES is declared separately.
+  Workspace modes are explicit persisted values:
+    Line2D  = 1
+    Volume3D = 2
+    Crooked = 3
+
+Regression assertions:
+  - Persisted numeric contract is exactly 1/2/3.
+  - Win32-to-core mapping: 1->Line2D, 2->Volume3D, 3->Crooked.
+  - Core-to-Win32 mapping round-trips all three modes.
+  - Full go test ./... -count=1: PASS.
+  - %SEISFORGE_TEST_ROUTE_FILE% automatic route remains Regular3D under the prior
+    duplicate-Inline fix.
+
+Executable:
+  Limage_v1.9.0_phase1_entryfix_x64.exe
+  Version title: 1.9.0 Phase 1.2
+  Size: 6,246,912 bytes
+  SHA-256: 42522ce0f3cee1a61c4ed908ef26e7de904f07bcdf97f340932f61047e8326c9
+
+Earlier Phase 1, RouteFix, 3Dfix and original v1.8.7 executables remain preserved.

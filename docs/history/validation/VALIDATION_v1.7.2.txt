@@ -1,0 +1,20 @@
+Limage v1.7.2 validation
+========================
+
+1. Native Go test suite
+   command: go test ./... -count=1
+   result: PASS
+
+2. Residual / export focused tests
+   command: go test ./internal/segy -run 'TestRenderTraceDifferencePairs|TestExport' -count=1
+   result: PASS
+
+3. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.7.2_x64.exe ./cmd/limage
+   result: PASS
+
+4. Binary identification
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+5. SHA-256
+   68012a132459dfc326e5b4169adee5903f39da0022b28aad225d69288f0fe436  Limage_v1.7.2_x64.exe

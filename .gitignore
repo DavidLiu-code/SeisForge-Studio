@@ -1,0 +1,104 @@
+# Build artifacts and profiling output
+*.[eE][xX][eE]
+*.[eE][xX][eE]~
+*.[dD][lL][lL]
+*.[pP][dD][bB]
+*.[mM][sS][iI]
+*.test
+*.test.exe
+*.out
+*.pprof
+*.prof
+*.trace
+coverage.*
+bin/
+build/
+dist/
+/.tmp-go-cache/
+/.gocache*/
+exports/
+output/
+artifacts/
+# User-generated figure bundles contain local data paths and reference images.
+*.[fF][iI][gG][uU][rR][eE]/
+
+# Seismic, navigation, and generated cache data
+*.[sS][gG][yY]
+*.[sS][eE][gG][yY]
+*.[sS][uU]
+*.[dD][aA][tT]
+*.lidx
+*.cidx
+*.ptx
+*.pidx
+
+# Runtime logs, crash output, and temporary files
+*.log
+*.dmp
+*.tmp
+*.temp
+*.bak
+*.old
+*~
+*.zip
+*.7z
+*.rar
+recovery/
+
+# Local settings, license material, and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+*.lic
+*.license
+volume_view.json
+crooked_view.json
+crooked_style.json
+pseudo_view.json
+start_center.json
+recent.json
+workspace_trace.log
+home3d_trace.log
+clock.state
+cmd/licensegen/
+
+# Editor and OS-local metadata
+.idea/
+.vscode/
+.vs/
+.codex/
+.agents/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local external algorithm modules are never part of the public repository.
+# Source must live outside this worktree; these rules only prevent accidents.
+/private_algorithms/
+/algorithms-private/
+/local_algorithms/
+/private_plugins/
+/private_build/
+/dist/private/
+*.sfplugin
+*.sfalgorithm
+*.private.exe
+*.private.zip
+*.sfdata
+go.work
+go.work.sum
+
+# Private model weights and training outputs
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.ckpt
+*.h5
+*.hdf5
+/training_data/
+/model_weights/

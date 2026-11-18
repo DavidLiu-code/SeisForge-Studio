@@ -1,0 +1,35 @@
+Limage v1.8.0 validation
+========================
+
+1. Native Go test suite
+   command: go test ./... -count=1
+   result: PASS
+   - internal/license: PASS
+   - internal/segy: PASS
+
+2. Windows UI package compile
+   command: GOOS=windows GOARCH=amd64 go test ./cmd/limage -count=1
+   result: PASS
+
+3. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.8.0_x64.exe ./cmd/limage
+   result: PASS
+
+4. Binary identification
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+5. Feature/static checks
+   - 2D / 3D / Crooked Line welcome entry controls: PASS
+   - WM_DROPFILES in main compare workspace: PASS
+   - WM_DROPFILES in 3D Volume window: PASS
+   - WM_DROPFILES in data-load dialog: PASS
+   - DragAcceptFiles registration: PASS
+   - .sgy/.segy filtering: PASS
+   - existing NumPad-1/End normalization retained: PASS
+
+6. SHA-256
+   6795577c93c3d578e6aefda22dfc5e4ed944462031b8b40430a3c265b4dda25c  Limage_v1.8.0_x64.exe
+
+Note:
+The build environment is Linux, so the Windows GUI cannot be interactively mouse-tested here.
+The native logic tests and Windows x64 compile/build checks pass; final drag/drop feel should be confirmed on Windows.

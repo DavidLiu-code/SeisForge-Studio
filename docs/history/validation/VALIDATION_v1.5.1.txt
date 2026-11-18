@@ -1,0 +1,17 @@
+Limage v1.5.1 validation
+=======================
+
+go test ./... : PASS
+Windows build: GOOS=windows GOARCH=amd64, -H=windowsgui : PASS
+Binary type: PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+SHA-256: a59a4636eafcc1ff0c3152ba1eb31794f22721aeba3114a98d350afaf24c5d12
+
+Primary v1.5.1 visual changes:
+- default minimal bounding box uses outer silhouette only
+- no internal bounding-box guide lines through seismic slices
+- restrained 2.6:1 maximum IL/XL display anisotropy
+- T display scale tied to dominant horizontal (~0.52)
+- 5 view-size presets, default extra-large
+- final inactive/active/hover/drag border hierarchy
+- Time Slice ~0.88 opacity
+- minimal cursor crosshair only on active/hovered slice

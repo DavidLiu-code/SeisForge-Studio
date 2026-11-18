@@ -1,0 +1,15 @@
+Limage v1.5.2 validation
+=======================
+
+go test ./... : PASS
+Windows build : PASS
+Build command : GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.5.2_x64.exe ./cmd/limage
+Binary type   : PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+SHA-256       : 5a87899247b6ca7ba5541fd977f276fd7312feeeb2534af6a46bb0a2ba79be53
+
+Key checks:
+- Active border reduced in minimal mode.
+- Static intersection color further softened.
+- Extreme horizontal display ratio capped at 2.2:1.
+- Time Slice automatic clim widened by 15%; manual limits untouched.
+- User-facing cigvis development wording removed from runtime status.

@@ -1,0 +1,17 @@
+?   	limage64/cmd/limage	[no test files]
+=== RUN   TestIBM
+--- PASS: TestIBM (0.00s)
+=== RUN   TestDistHeader
+--- PASS: TestDistHeader (0.00s)
+=== RUN   TestOpenAndRenderSynthetic
+--- PASS: TestOpenAndRenderSynthetic (0.00s)
+=== RUN   TestSparseOver4GBUses64BitOffsets
+--- PASS: TestSparseOver4GBUses64BitOffsets (0.00s)
+=== RUN   TestWindowedTraceIOAndTraceStep
+--- PASS: TestWindowedTraceIOAndTraceStep (0.00s)
+=== RUN   TestLegacyGainPercentileTrim
+--- PASS: TestLegacyGainPercentileTrim (0.00s)
+=== RUN   TestPoststackGeometryCacheAndTimeSliceSlab
+--- PASS: TestPoststackGeometryCacheAndTimeSliceSlab (0.00s)
+PASS
+ok  	limage64/internal/segy	(cached)

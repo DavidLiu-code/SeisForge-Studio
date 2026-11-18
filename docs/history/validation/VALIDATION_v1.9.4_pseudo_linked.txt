@@ -1,0 +1,51 @@
+Limage v1.9.4 Phase 6 validation
+Date: 2026-08-25 (Asia/Shanghai)
+
+Baseline
+--------
+External copy: <external-baseline-backup>
+Files copied: 210
+Manifest: SHA256SUMS.txt
+Repository Git metadata: absent
+
+Automated tests
+---------------
+Command: go test ./... -count=1
+Result: PASS for cmd/limage and every internal package.
+
+Phase 6 coverage includes perspective/orthographic projection round-trips,
+frontmost curtain picking, blank-background rejection, clean/standard overlay
+separation, edge/corner AOI resize, one-percent minimum spans, style mapping,
+frozen parameter schemas, minimized-window restoration, and confirmation that
+range preview performs no Reader or amplitude-loading work.
+
+Real survey acceptance
+----------------------
+Command: LIMAGE_PHASE5_FULL_ACCEPTANCE=1 go test ./cmd/limage -run TestProvidedSu36PseudoAOIClipsBeforeAmplitudeLoad -count=1 -v
+Result: PASS in 4.63 seconds.
+Survey: %SEISFORGE_TEST_CROOKED_PROJECT_DIR%
+Validated: central AOI loaded 33/62 lines as 33 clipped curtain segments using
+51904512 indexed-texture bytes. All scene vertices remained inside the AOI.
+
+Command: LIMAGE_PHASE4_FULL_ACCEPTANCE=1 go test ./cmd/limage -run TestProvidedSu36Pseudo3DAllCurtains -count=1 -v
+Result: PASS in 7.30 seconds. Full-project behavior still loads all 62 lines.
+
+Frozen regression
+-----------------
+cmd/limage/volume_windows.go is byte-identical to the Phase 6 baseline.
+SHA-256: f17a613553ec16b82bfb27c3def2aee3cea0460aba2e41576220753ebfdc2cff
+
+crooked_view.json v1, pseudo_view.json v2, volume_view.json v1, palette order,
+gain/clip, regular 3-D rendering, indexing, export, spectrum, Recent, drag/drop,
+and licensing schemas remain unchanged. The new style preference is isolated in
+crooked_style.json v1.
+
+Release build
+-------------
+Command: build_windows_release.ps1
+Linker flags: -s -w -H=windowsgui
+Executable: Limage_v1.9.4_pseudo_linked_x64.exe
+Bytes: 4253184
+PE Subsystem: 2 (Windows GUI; no console window)
+SHA-256: 40a5575aea7acdbfd8c9f94b3f6abdd0927fd7da432a8fb39490c9e7c21c65b0
+Runtime version: Limage v1.9.4 Phase 6

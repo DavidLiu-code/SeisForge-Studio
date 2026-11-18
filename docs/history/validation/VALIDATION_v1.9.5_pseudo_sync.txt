@@ -1,0 +1,57 @@
+Limage v1.9.5 Phase 7 validation
+Date: 2026-08-25 (Asia/Shanghai)
+
+Baseline
+--------
+External copy: <external-baseline-backup>
+Files copied: 215
+Manifest: SHA256SUMS.txt
+Manifest SHA-256: 128497cc81820542d8692c1f408c1c275ff7792bbee1273e07f744ad5beb7b50
+Repository Git metadata: absent
+
+Automated tests
+---------------
+Command: go test ./... -count=1
+Result: PASS for cmd/limage and every internal package.
+
+Phase 7 coverage includes direct Geometry drag zoom and deferred click/double-
+click routing, cached AOI contraction, expansion preview/refinement, range
+generation rejection, linked cursor throttling and projection, perspective and
+orthographic ProjectPoint parity, dynamic-overlay clipping, the 192 MiB texture
+budget, two-Reader worker limit, and all Phase 1-6 regressions.
+
+Real survey acceptance
+----------------------
+Command: LIMAGE_PHASE5_FULL_ACCEPTANCE=1 go test ./cmd/limage -run TestProvidedSu36PseudoAOIClipsBeforeAmplitudeLoad -count=1 -v
+Result: PASS in 3.97 seconds.
+Survey: %SEISFORGE_TEST_CROOKED_PROJECT_DIR%
+Validated: central AOI loaded 33/62 lines as 33 clipped curtain segments using
+51904512 indexed-texture bytes. All scene vertices remained inside the AOI.
+
+Command: LIMAGE_PHASE4_FULL_ACCEPTANCE=1 go test ./cmd/limage -run TestProvidedSu36Pseudo3DAllCurtains -count=1 -v
+Result: PASS in 5.29 seconds. Clearing the range still loads all 62 lines.
+
+Frozen regression
+-----------------
+cmd/limage/volume_windows.go is byte-identical to the Phase 7 baseline.
+SHA-256: f17a613553ec16b82bfb27c3def2aee3cea0460aba2e41576220753ebfdc2cff
+
+crooked_view.json v1, pseudo_view.json v2, volume_view.json v1, palette order,
+gain/clip, regular 3-D rendering, indexing, export, spectrum, Recent, drag/drop,
+licensing, .lidx, and .cidx formats remain unchanged.
+
+Release build
+-------------
+Command: powershell.exe -NoProfile -ExecutionPolicy Bypass -File build_windows_release.ps1
+Linker flags: -s -w -H=windowsgui
+Executable: Limage_v1.9.5_pseudo_sync_x64.exe
+Bytes: 4300288
+PE Subsystem: 2 (Windows GUI; no console window)
+SHA-256: 14f5a370fc30c1e6e56202d55198c7aa8823c2519b9d8acc15d81f9e417db80d
+Runtime version: Limage v1.9.5 Phase 7
+
+Launch check
+------------
+The release executable started successfully, exposed a non-zero Limage main
+window handle, accepted CloseMainWindow, and exited normally. No console
+subsystem process or black command window was created.

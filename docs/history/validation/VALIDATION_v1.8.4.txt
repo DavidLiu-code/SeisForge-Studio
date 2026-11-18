@@ -1,0 +1,32 @@
+Limage v1.8.4 validation
+========================
+
+1. Native Go tests
+   command: go test ./... -count=1
+   result: PASS
+
+2. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.8.4_x64.exe ./cmd/limage
+   result: PASS
+
+3. Binary identification
+   PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+4. Home -> 3D direct-open regression checks
+   - showVolumeWindow resets volumeFocusPanel to -1: PASS
+   - showVolumeWindow resets volume3D=true: PASS
+   - Volume WM_DESTROY clears volumeFocusPanel: PASS
+   - completeWorkspaceOpen uses direct Volume route before 2-D welcome refresh: PASS
+   - only explicit double-click inside current Volume enters 2D Full View: retained
+
+5. Preserved regressions
+   - v1.8.3 3D/2D slice style synchronization retained
+   - v1.8.2 Start Center / drag highlight / Recent retained
+   - 3D default interaction retained
+   - style order remains Clean / CIGVis / Interpretation / Standard
+   - v1.7.2 NumPad 1 / End handling retained
+
+6. SHA-256
+   60516e7524a42ea55ba630cd0219a98f43e605affa760981f8d26d83bc1c5b55  Limage_v1.8.4_x64.exe
+
+Note: Windows mouse/window behavior cannot be interactively exercised in the Linux build host. The Windows-specific direct-open/reset code path compiles successfully; final visual confirmation should be made on Windows.

@@ -1,0 +1,21 @@
+Limage v1.6.3 validation
+=======================
+
+Changes validated:
+- Aspect selector: actual / balanced / saved default
+- Actual IL:XL ratio: no visual compression clamp
+- Saved default scene shape persisted in volume_view.json
+- Clean style: no box, no slice borders, no intersection lines
+- Visible compare and volume windows use WS_EX_APPWINDOW / no hidden owner
+- Opening volume hides the 2-D workspace; closing volume restores it
+- Normal double-click opens 2-D without relocation
+- Ctrl+double-click is the explicit 3-D relocation action
+- Existing X/Y/Z/R/F shortcuts and Help remain enabled
+
+Build/test:
+- go test ./... : PASS
+- GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui ./cmd/limage : PASS
+- Binary format: PE32+ Windows GUI x86-64
+
+SHA-256:
+3dae6ffd4e264632ee5dec389ed6777f409443565e7b9486fdde976fbf3f7d58  Limage_v1.6.3_x64.exe

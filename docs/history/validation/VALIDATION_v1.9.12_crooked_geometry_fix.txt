@@ -1,0 +1,62 @@
+Limage v1.9.12 Crooked Geometry Fix validation
+Date: 2026-08-27
+
+Release artifact
+- Limage_v1.9.12_crooked_geometry_fix_x64.exe
+- Size: 4,623,360 bytes
+- PE subsystem: Windows GUI (2)
+- SHA-256: 594F473183B66368E7FFE69D39AADCD8870CC42D6EA7C69FE282377E1355D29D
+
+Implemented contracts
+- The XY project overview uses one canonical trajectory derived from calibrated
+  per-trace SEG-Y header coordinates for bounds, drawing, hit-testing and cursor
+  placement. DAT navigation is calibration input only.
+- Active/inactive selection changes styling only and cannot replace the map
+  trajectory or project bounds.
+- A map click keeps line ID, trace index, project/header generations and a
+  geometry fingerprint until the selected section is ready.
+- Every valid project line, including lines with DAT navigation, is prepared in
+  the background. The overview and line selector become interactive only after
+  every line has either a canonical geometry or a reported error.
+- Raw .cidx geometry remains unmodified. Decimal scale and constant X/Y
+  translation are applied to a derived copy.
+- Derived pseudo-3-D texture cache algorithm version was advanced to 3.
+  Its key includes the final canonical geometry fingerprint, so mixed 0.1/1.0
+  coordinate scales, translations and old navigation-only textures cannot be
+  reused or rescaled a second time.
+- Lines whose DAT/header calibration failed remain excluded from the overview,
+  range tools and pseudo-3-D. DAT never becomes a fallback display geometry.
+- Hide/Show resumes unfinished header geometry and an interrupted active
+  section without duplicating completed or failed jobs. Header-setting changes
+  invalidate pseudo-3-D before rebuilding the canonical project geometry.
+- Concurrent cold .cidx writers use unique temporary files and an atomic
+  in-process Windows commit; the cache format and raw geometry remain unchanged.
+
+Automated verification
+- go test ./... -count=1: PASS
+- 161 Go test cases across 12 packages: PASS
+- High-risk Crooked/pseudo lifecycle tests, count=10: PASS
+- Project calibration tests, count=10: PASS
+- Concurrent cold .cidx cache test, count=20: PASS
+- go test ./internal/project -count=1 -v: PASS
+- Windows release build script: PASS
+- PE GUI subsystem check: PASS
+
+Provided survey acceptance
+- Folder: %SEISFORGE_TEST_CROOKED_PROJECT_DIR%
+- Valid SEG-Y lines: 62/62
+- Canonical calibrated header paths: 62/62
+- Focus lines passed: 01554-289, H15FZ6398_286 and 92549_289
+- 92549_289 decimal multiplier: accepted 0.1
+- Selecting each of the 62 lines leaves the full-project bounds unchanged.
+- Canonical-path acceptance runtime during the final test run: approximately 1 s.
+
+Packaged smoke verification
+- The new Windows GUI executable was launched hidden with the provided survey
+  folder and remained alive for 6 seconds without an early exit.
+
+Compatibility
+- Source SEG-Y and DAT files were opened read-only.
+- Existing v1.9.11 executable is retained.
+- Existing ScaleGeometry and InferCoordinateMultiplier entry points remain
+  available as compatibility wrappers.

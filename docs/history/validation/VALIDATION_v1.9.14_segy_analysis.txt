@@ -1,0 +1,24 @@
+Limage v1.9.14 SEG-Y Analysis validation
+
+Artifact
+- Limage_v1.9.14_segy_analysis_x64.exe
+- Size: 4,990,976 bytes
+- SHA-256: c4acaa38bdbc24ee70d4942c8610baff6959925568aaafe1c49e24a086709d7e
+- PE Subsystem: Windows GUI (2)
+
+Verification
+- go test ./... -count=1: PASS
+- internal/segy header parsing: PASS
+- internal/segyanalysis statistics and spectrum: PASS
+- ordinary 2-D A/B/difference and Time Slice trace mapping: PASS
+- crooked 2-D trace selection integration: PASS
+- true 3-D 2D Full View physical trace mapping: PASS
+- legacy average-spectrum exact compatibility test: PASS
+- sample format code 4 header-only behavior: PASS
+- zoomed single-trace continuous waveform and per-pixel spike envelope: PASS
+- non-finite waveform gaps remain disconnected: PASS
+
+Baseline backup
+- ..\phase14_backups\baseline_20260830_083907_1.9.13
+- Baseline SHA-256 manifest: SHA256SUMS.txt
+- Baseline manifest SHA-256: f11f47800dcb8c1200f7ef590f475f85983f5296be71f3e6d08cdd8cde8d44d1

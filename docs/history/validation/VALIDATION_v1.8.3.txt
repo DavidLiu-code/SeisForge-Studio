@@ -1,0 +1,37 @@
+Limage v1.8.3 validation
+========================
+
+1. Native Go test suite
+   command: go test ./... -count=1
+   result: PASS
+
+?   	limage64/cmd/licensegen	[no test files]
+?   	limage64/cmd/limage	[no test files]
+ok  	limage64/internal/license	0.004s
+ok  	limage64/internal/segy	0.043s
+
+2. Windows x64 GUI build
+   command: GOOS=windows GOARCH=amd64 go build -ldflags='-H=windowsgui' -o Limage_v1.8.3_x64.exe ./cmd/limage
+   result: PASS
+
+3. Binary identification
+    PE32+ executable for MS Windows 6.01 (GUI), x86-64, 15 sections
+
+4. SHA-256
+   102da2ffdcb1bfa948d4edcda2b8d1eab265bbe5415c9638a8282a5bcbce4e9d  Limage_v1.8.3_x64.exe
+
+5. v1.8.3 focused checks
+   - 2D Full View entered from 3D Volume inherits current volume style.
+   - Clean: no frame, no fixed intersection guides, no moving crosshair.
+   - CIGVis: borderless, fixed orthoslice intersection guides only.
+   - Interpretation: light frame + fixed guides + compact local cursor crosshair.
+   - Standard: clearer frame + fixed guides + full-span cursor crosshair.
+   - Style changes redraw immediately without reloading SEG-Y or changing gain/palette/slice positions.
+   - Existing tiled 2-D three-panel borders are retained unchanged.
+   - Style combo order remains Clean, CIGVis, Interpretation, Standard.
+   - v1.7.2 NumPad routing source remains present and untouched by this change.
+   - Start Center / drag-drop / recent-file behavior is unchanged except application version metadata.
+
+Note
+----
+The Windows GUI binary is cross-compiled in this Linux environment. Native unit tests and Windows compilation pass; final visual line thickness/contrast should still be checked interactively on Windows.

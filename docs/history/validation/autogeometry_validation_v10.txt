@@ -1,0 +1,21 @@
+test_poststack_A.sgy
+  detected IL/XL=189/193 score=100.0 confidence=1.000 ambiguous=false samples=2000 duration=108.977484ms err=<nil>
+  #1 IL/XL 189/193 score 100.0 | grid 100% one-axis 98% dup 0.0%
+  #2 IL/XL 189/194 score 88.4 | grid 100% one-axis 98% dup 0.0%
+  #3 IL/XL 187/193 score 88.2 | grid 100% one-axis 98% dup 0.0%
+  #4 IL/XL 186/193 score 87.9 | grid 100% one-axis 98% dup 0.0%
+  #5 IL/XL 189/182 score 87.9 | grid 100% one-axis 98% dup 0.0%
+test_poststack_B.sgy
+  detected IL/XL=189/193 score=100.0 confidence=1.000 ambiguous=false samples=2000 duration=108.667133ms err=<nil>
+  #1 IL/XL 189/193 score 100.0 | grid 100% one-axis 98% dup 0.0%
+  #2 IL/XL 189/194 score 88.4 | grid 100% one-axis 98% dup 0.0%
+  #3 IL/XL 187/193 score 88.2 | grid 100% one-axis 98% dup 0.0%
+  #4 IL/XL 186/193 score 87.9 | grid 100% one-axis 98% dup 0.0%
+  #5 IL/XL 189/182 score 87.9 | grid 100% one-axis 98% dup 0.0%
+test_poststack_custom_bytes_101_137.sgy
+  detected IL/XL=101/137 score=92.8 confidence=0.702 ambiguous=false samples=432 duration=69.068182ms err=<nil>
+  #1 IL/XL 101/137 score 92.8 | grid 100% one-axis 96% dup 0.0%
+  #2 IL/XL 101/138 score 87.8 | grid 100% one-axis 96% dup 0.0%
+  #3 IL/XL 102/137 score 87.8 | grid 100% one-axis 96% dup 0.0%
+  #4 IL/XL 103/137 score 87.3 | grid 100% one-axis 96% dup 0.0%
+  #5 IL/XL 101/140 score 87.3 | grid 100% one-axis 96% dup 0.0%

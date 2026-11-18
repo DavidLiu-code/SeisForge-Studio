@@ -1,0 +1,33 @@
+Limage v1.9.0 Phase 2 validation
+Date: 2026-08-24
+
+Baseline backup:
+  <external-baseline-backup>
+  SHA-256 7BA02F036057B8C89E7A1C102769970A9C2F7188F3984B3C712624B483087BE2
+
+Automated verification:
+  go test ./... -count=1
+  PASS: cmd/limage, internal/app, internal/dataset, internal/geometry,
+        internal/license, internal/segy, internal/workspace
+
+Phase 2 coverage:
+  - standard/custom X/Y/CDP/scalar/unit header reads
+  - positive, negative and zero coordinate scalar behavior
+  - Ensemble -> Source -> Group automatic coordinate fallback
+  - straight XY -> Line2D and curved XY -> Crooked auto classification
+  - cumulative distance, bounds, nearest trace and non-uniform distance sampling
+  - .cidx v1 cache hit and header-spec cache invalidation
+  - positioned trace rendering and Crooked CDP acquisition-order fallback
+  - dedicated Crooked adapter with no legacy Line2D render-chain calls
+  - Volume index-progress callback and non-colliding Win32 message contract
+  - frozen palettes, gain/clip/display defaults and volume_view.json v1 regression
+
+Build:
+  go build -trimpath -ldflags='-H=windowsgui' -o Limage_v1.9.0_crooked_phase2_x64.exe ./cmd/limage
+
+Artifact:
+  Limage_v1.9.0_crooked_phase2_x64.exe
+  Size: 6422528 bytes
+  SHA-256: 51742CEB8FD4E122198895FECD5D8242ACDB8988683B4004827E7B222EDC66AD
+
+Existing Phase 1, v1.8.7 and 3Dfix executables were not overwritten.

@@ -1,0 +1,65 @@
+Limage v1.9.3 Phase 5 validation
+Date: 2026-08-24 (Asia/Shanghai)
+
+Baseline
+--------
+External copy: <external-baseline-backup>
+Files copied: 205
+Copied bytes: 56388832
+Manifest: SHA256SUMS_PHASE5_BASELINE.txt
+Manifest SHA-256: 0697a81a1c8942de9a293806a96bfa2f74500ab54bc9d2030aaeac79431a9054
+
+Automated tests
+---------------
+Command: go test ./... -count=1
+Result: PASS for cmd/limage and every internal package.
+
+Coverage added for normalized/degenerate XY ranges, boundary and outside
+segments, endpoints-outside crossings, multiple re-entry runs, v1 -> v2 view
+migration, exact Volume3D option parity, pre-Reader coarse rejection, clipped
+amplitude rendering, Reader closure, and segmented texture-budget allocation.
+
+Real survey acceptance
+----------------------
+Command: LIMAGE_PHASE5_FULL_ACCEPTANCE=1 go test ./cmd/limage -run TestProvidedSu36PseudoAOIClipsBeforeAmplitudeLoad -count=1 -v
+Result: PASS in 4.60 seconds.
+Survey: %SEISFORGE_TEST_CROOKED_PROJECT_DIR%
+Validated: 62 valid SEG-Y and 62 DAT navigation matches; central 10% world AOI
+reduced candidates to 33/62, retained multiplier 0.1, produced 33 clipped
+curtain segments, kept every scene vertex inside the AOI, and retained
+51904512 texture bytes (below 192 MiB).
+
+Command: LIMAGE_PHASE4_FULL_ACCEPTANCE=1 go test ./cmd/limage -run TestProvidedSu36Pseudo3DAllCurtains -count=1 -v
+Result: PASS in 7.27 seconds. Clearing/no AOI still loads all 62 curtains with
+multiplier 0.1.
+
+Interactive Win32 validation
+----------------------------
+- Launched the release EXE directly with the supplied project folder.
+- Dragged a central map rectangle through the production WM_LBUTTON path.
+- Pseudo window retained 62 list rows but checked/loaded only 43 screen-AOI
+  candidates; status reached 43 displayed, 0 failed.
+- Clearing the AOI rebuilt in the same pseudo HWND and reached 62 checked,
+  62 displayed, 0 failed; the window and camera session were not recreated.
+- X shortcut advanced the visible X-axis factor combo from option 10 to 11
+  while the pseudo window was active.
+- Production status confirmed left rotate, Shift+left pan and right/wheel zoom.
+- Process remained alive through project load, range creation, pseudo loading,
+  rendering and shortcut handling, then closed normally.
+
+Frozen regression
+-----------------
+cmd/limage/volume_windows.go is byte-identical to the Phase 5 baseline.
+SHA-256: f17a613553ec16b82bfb27c3def2aee3cea0460aba2e41576220753ebfdc2cff
+Existing palette order, gain/clip, crooked_view.json v1, volume_view.json v1,
+3-D indexing, routing, export, spectrum and license tests passed.
+
+Release build
+-------------
+Command: build_windows_release.cmd
+Underlying linker flags: -s -w -H=windowsgui
+Executable: Limage_v1.9.3_pseudo_aoi_x64.exe
+Bytes: 4182528
+PE Subsystem: 2 (Windows GUI; no console window)
+SHA-256: d8e52baed811fe449722882e6df82b1cdf2e2f4aa34569e82fae2fda693fcc68
+Runtime title: Limage v1.9.3 Phase 5 [x64] - 地震浏览与对比工作台

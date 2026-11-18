@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用与支持说明
+    url: https://github.com/DavidLiu-code/SeisForge-Studio/blob/main/SUPPORT.md
+    about: 提交前请阅读支持范围和诊断信息要求。
+  - name: 私下报告安全漏洞
+    url: https://github.com/DavidLiu-code/SeisForge-Studio/security/advisories/new
+    about: 请勿在公开 Issue 中披露漏洞或敏感数据。

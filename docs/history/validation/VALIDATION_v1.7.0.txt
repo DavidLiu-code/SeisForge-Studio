@@ -1,0 +1,22 @@
+Limage v1.7.0 validation
+========================
+
+Date: 2026-08-23
+Target: Windows x64 GUI
+
+Tests:
+- go test ./... : PASS
+- Windows cross-build: PASS
+- file type: PE32+ executable for MS Windows 6.01 (GUI), x86-64
+
+Major v1.7.0 checks implemented:
+- Single-volume mode remains available.
+- Dual A/B 3-D workspace state separated.
+- A/B camera, FOV, zoom/pan, axis scale and slices are independently stored.
+- Active scene is selected by clicking the left/right scene.
+- '与左图一致' maps B to A using IL/XL physical coordinates and physical time.
+- Shared palette/gain refreshes both A/B scenes.
+- Initial vertical composition bias reduced (view moved slightly upward).
+
+SHA-256:
+4be0081915ccee7cb1aa6ef78de10ed73febd74bdd47f547e537338a5e1ab5ef
