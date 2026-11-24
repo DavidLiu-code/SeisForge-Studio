@@ -24,7 +24,10 @@ func TestNumericalExportLayoutAlignsSpaceAndTimeBelowScope(t *testing.T) {
 					t.Fatalf("DPI %d width %v: field %d does not share the row and label baseline: %+v", dpi, widthDIP, i, g)
 				}
 			}
-			boxes := append([]RECT{g.availability, g.scopeLabel, g.scope, g.stageLabel, g.stage, g.spaceLabel, g.timeLabel, g.fieldStatus}, g.objects[:]...)
+			if g.format.Top != g.scope.Top || g.format.Bottom != g.scope.Bottom || g.formatLabel.Top != g.scopeLabel.Top {
+				t.Fatalf("DPI %d width %v: format selector is not aligned with scope: %+v", dpi, widthDIP, g)
+			}
+			boxes := append([]RECT{g.availability, g.scopeLabel, g.scope, g.stageLabel, g.stage, g.formatLabel, g.format, g.spaceLabel, g.timeLabel, g.fieldStatus}, g.objects[:]...)
 			boxes = append(append(boxes, g.labels[:]...), g.edits[:]...)
 			for i, a := range boxes {
 				if a.Left < 0 || a.Right > int32(width) || a.Top < 0 || a.Bottom > int32(g.previewTop) || a.Right <= a.Left || a.Bottom <= a.Top {

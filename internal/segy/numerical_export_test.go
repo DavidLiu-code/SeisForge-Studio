@@ -36,7 +36,7 @@ func TestNumericalExportVerifySingleSampleNaNPrecisionAndCancellation(t *testing
 		t.Fatal(err)
 	}
 	defer a.Close()
-	opt := NumericalSectionExportOptions{Traces: []NumericalExportTrace{{4, 5}, {1, 5}}, SampleCount: 1,
+	opt := NumericalSectionExportOptions{Traces: []NumericalExportTrace{{4, 5}, {1, 5}}, SampleCount: 1, SampleFormat: ExportFormatIEEE64,
 		Provenance: "A-B; baseline; A=A.sgy; B=B.sgy",
 		ReadValues: func(i int) ([]float64, error) {
 			return [][]float64{{1.0000000000000002}, {math.Inf(1)}}[i], nil

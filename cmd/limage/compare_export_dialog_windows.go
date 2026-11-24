@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"unsafe"
+
+	"github.com/DavidLiu-code/SeisForge-Studio/internal/segy"
 )
 
 const (
@@ -36,7 +38,27 @@ const (
 	numericalExportReload
 	numericalExportAutoName
 	numericalExportDetails
+	numericalExportFormat
 )
+
+var numericalExportFormats = [...]struct {
+	value segy.ExportSampleFormat
+	label string
+}{
+	{segy.ExportFormatSource, "沿用输入（默认）"},
+	{segy.ExportFormatIBM32, "IBM 32 位"},
+	{segy.ExportFormatIEEE32, "IEEE 32 位"},
+	{segy.ExportFormatIEEE64, "IEEE 64 位"},
+}
+
+func numericalExportFormatLabel(format segy.ExportSampleFormat) string {
+	for _, choice := range numericalExportFormats {
+		if choice.value == format {
+			return choice.label
+		}
+	}
+	return "未知采样格式"
+}
 
 const (
 	numericalExportPreviewMessage = WM_USER + 230
@@ -48,6 +70,7 @@ type numericalExportDialog struct {
 	capture                     compareExportCapture
 	object                      [3]uintptr
 	scope, stage, path, preview uintptr
+	format, formatLabel         uintptr
 	head, availability, status  uintptr
 	browse, write, cancel       uintptr
 	folder, reload              uintptr
@@ -208,6 +231,12 @@ func (d *numericalExportDialog) createControls(generated bool) {
 	}
 	d.scope = combo(numericalExportScope, labels)
 	d.stage = combo(numericalExportStage, []string{"当前有效结果", "基础数据（不含视图滤波）"})
+	d.formatLabel = label("采样格式")
+	var formatLabels [len(numericalExportFormats)]string
+	for i, choice := range numericalExportFormats {
+		formatLabels[i] = choice.label
+	}
+	d.format = combo(numericalExportFormat, formatLabels[:])
 	if generated {
 		pSendMessageW.Call(d.scope, CB_SETCURSEL, compareExportAll, 0)
 		pSendMessageW.Call(d.stage, CB_SETCURSEL, 1, 0)
@@ -283,6 +312,8 @@ func (d *numericalExportDialog) layout() {
 	box(d.scope, g.scope, true)
 	box(d.stageLabel, g.stageLabel, false)
 	box(d.stage, g.stage, true)
+	box(d.formatLabel, g.formatLabel, false)
+	box(d.format, g.format, true)
 	box(d.spaceLabel, g.spaceLabel, false)
 	box(d.timeLabel, g.timeLabel, false)
 	for i := range d.manualEdit {
@@ -307,10 +338,11 @@ func (d *numericalExportDialog) layout() {
 }
 
 type numericalExportRangeRects struct {
-	objects                                                                                [3]RECT
-	availability, scopeLabel, scope, stageLabel, stage, spaceLabel, timeLabel, fieldStatus RECT
-	labels, edits                                                                          [4]RECT
-	previewTop                                                                             int
+	objects                                                                 [3]RECT
+	availability, scopeLabel, scope, stageLabel, stage, formatLabel, format RECT
+	spaceLabel, timeLabel, fieldStatus                                      RECT
+	labels, edits                                                           [4]RECT
+	previewTop                                                              int
 }
 
 // Geometry is independent of scope and values: "manual" changes editability
@@ -350,13 +382,13 @@ func numericalExportRangeLayoutMeasured(width, dpi int, spatialAxis string, meas
 	head := max(spaceHead, timeHead)
 	short := max(labelWidth("起", 15), labelWidth("止", 15))
 	narrow := half < head+2*(short+gap+px(42))
-	scopeW := half
-	if narrow {
-		scopeW = inner
-	}
 	scopeLabel := labelWidth("范围", 66)
 	r.scopeLabel = rect(m, y+px(3), scopeLabel, row-px(3))
-	r.scope = rect(m+scopeLabel, y, scopeW-scopeLabel, row)
+	r.scope = rect(m+scopeLabel, y, half-scopeLabel, row)
+	formatX, formatW := m+half+gap, inner-half-gap
+	formatLabel := labelWidth("采样格式", 66)
+	r.formatLabel = rect(formatX, y+px(3), formatLabel, row-px(3))
+	r.format = rect(formatX+formatLabel, y, formatW-formatLabel, row)
 	group := func(x, gy, groupW, i, head int) RECT {
 		field := (groupW - head - 2*short - 2*gap) / 2
 		labelX := x + head
@@ -445,6 +477,9 @@ func exportExact(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) 
 func (d *numericalExportDialog) currentRequest() (q compareExportSelection, err error) {
 	r, _, _ := pSendMessageW.Call(d.stage, CB_GETCURSEL, 0, 0)
 	q = compareExportSelection{kind: d.selection, scope: d.selectedScope(), effective: r == 0}
+	if i, _, _ := pSendMessageW.Call(d.format, CB_GETCURSEL, 0, 0); i < uintptr(len(numericalExportFormats)) {
+		q.format = numericalExportFormats[i].value
+	}
 	if q.scope == compareExportManual {
 		q.manual, err = parseCompareExportBounds(d.manualDraft)
 	}
@@ -649,7 +684,7 @@ func translateNumericalExportMessage(m *MSG) bool {
 		return false
 	}
 	if m.WParam == VK_ESCAPE {
-		for _, control := range []uintptr{d.scope, d.stage} {
+		for _, control := range []uintptr{d.scope, d.stage, d.format} {
 			if open, _, _ := pSendMessageW.Call(control, CB_GETDROPPEDSTATE, 0, 0); open != 0 {
 				return false
 			}
@@ -789,7 +824,7 @@ func (d *numericalExportDialog) browseDestination() {
 }
 
 func (d *numericalExportDialog) setWriting(writing bool) {
-	for _, h := range append([]uintptr{d.scope, d.stage, d.path, d.browse, d.write, d.autoName, d.details}, d.manualEdit[:]...) {
+	for _, h := range append([]uintptr{d.scope, d.stage, d.format, d.path, d.browse, d.write, d.autoName, d.details}, d.manualEdit[:]...) {
 		pEnableWindow.Call(h, boolToFlag(!writing))
 	}
 	for i, available := range d.available() {
@@ -898,8 +933,8 @@ func numericalExportWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintp
 				}
 				d.previewCancel = nil
 				if a.err != nil {
-					setText(d.fieldStatus, "无法解析该范围；请检查起止、数据覆盖或数值阶段。")
-					d.setExportError("范围尚不可用，请依据详情调整后再导出。", a.err)
+					setText(d.fieldStatus, "请检查起止、数据覆盖、数值阶段或采样格式。")
+					d.setExportError("当前导出设置不可用，请依据详情调整。", a.err)
 				} else {
 					d.plan = &a.plan
 					d.planReady = true
@@ -928,6 +963,10 @@ func numericalExportWndProc(h uintptr, msg uint32, wParam, lParam uintptr) uintp
 		case numericalExportScope, numericalExportStage:
 			if code == 1 { // CBN_SELCHANGE
 				d.setRangeFields()
+				d.refreshPlan()
+			}
+		case numericalExportFormat:
+			if code == 1 && !d.writing { // CBN_SELCHANGE
 				d.refreshPlan()
 			}
 		case numericalExportManualFirst, numericalExportManualLast, numericalExportManualT0, numericalExportManualT1:

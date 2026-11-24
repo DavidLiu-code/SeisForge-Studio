@@ -43,6 +43,7 @@ type compareExportSource struct {
 	description  string
 	originalStem string
 	processTag   string
+	generated    *poststack.SectionResult // immutable provenance of an owned B
 }
 
 type compareExportBounds struct {
@@ -65,6 +66,7 @@ type compareExportSelection struct {
 	kind, scope int
 	effective   bool
 	manual      compareExportBounds
+	format      segy.ExportSampleFormat
 }
 
 type compareExportPick struct {
@@ -88,6 +90,8 @@ type compareExportPlan struct {
 	il0, il1, xl0, xl1      int32
 	mapped                  int
 	size                    int64
+	sourceFormatCode        int
+	preserveSourceHeaders   bool
 	summary, provenance     string
 }
 
@@ -139,6 +143,7 @@ func captureNumericalCompareExport() (compareExportCapture, error) {
 		if i == 1 {
 			c.sources[i].sourceOrder = generatedPoststackTraceOrder(f.Info.Path)
 			c.sources[i].description = compareExportBDescription(f.Info.Path)
+			c.sources[i].generated = compareExportGeneratedSection(f.Info.Path)
 			if tag, fromA := compareExportGeneratedTag(f.Info.Path, d.fa.Info.Path, f.Info.SampleIntervalUS); fromA {
 				c.sources[i].originalStem = c.sources[0].originalStem
 				c.sources[i].processTag = tag
@@ -221,6 +226,38 @@ func compareExportBDescription(path string) string {
 		}
 	}
 	return "已加载文件"
+}
+
+func compareExportGeneratedSection(path string) *poststack.SectionResult {
+	generatedPoststackMu.RLock()
+	defer generatedPoststackMu.RUnlock()
+	for _, r := range generatedPoststackResults {
+		if !r.retired.Load() && r.ownsBProduct(path) {
+			return r.Section
+		}
+	}
+	return nil
+}
+
+func compareExportSourceFormat(f *segy.File, source compareExportSource) int {
+	if source.generated == nil {
+		if strings.EqualFold(filepath.Ext(source.path), ".sfdata") {
+			return -1 // artifact storage precision is not a source SEG-Y format
+		}
+		return f.Info.FormatCode
+	}
+	// Do not use a generated result's virtual float64 encoding as the input
+	// format. A known unchanged physical source can provide the default instead.
+	path := source.generated.SourcePath
+	if !segy.NumericalSEGYSuffix(path) || source.generated.SourceUnchanged() != nil {
+		return -1
+	}
+	input, err := segy.Open(path)
+	if err != nil {
+		return -1
+	}
+	defer input.Close()
+	return input.Info.FormatCode
 }
 
 func tFloat(origin int64, dt int, sample float64) float64 {
@@ -385,10 +422,25 @@ func planNumericalCompareExport(ctx context.Context, c compareExportCapture, q c
 			return p, err
 		}
 	}
-	p.dt = files[p.headerSide].Info.SampleIntervalUS
+	header := files[p.headerSide]
+	headerSource := c.sources[p.headerSide]
+	p.dt = header.Info.SampleIntervalUS
 	if p.dt <= 0 {
 		return p, errors.New("采样间隔无效")
 	}
+	p.sourceFormatCode = -1
+	if q.format == segy.ExportFormatSource {
+		p.sourceFormatCode = compareExportSourceFormat(header, headerSource)
+	}
+	format, err := segy.ResolveExportSampleFormat(q.format, p.sourceFormatCode)
+	if err != nil {
+		return p, err
+	}
+	// Match the verified physical-filter path. Derived or plain re-exports
+	// retain their lineage/geometry record, as do differences.
+	p.preserveSourceHeaders = q.effective && c.settings[p.headerSide].Enabled && q.kind != compareExportDifference &&
+		headerSource.generated == nil && headerSource.geometry != nil &&
+		header.CanPreserveNumericalExportHeaders(headerSource.geometry.InlineByte, headerSource.geometry.CrosslineByte)
 	if q.kind == compareExportDifference && (files[1].Info.SampleIntervalUS != p.dt || (q.scope != compareExportAll && lines[1] != lines[0])) {
 		return p, errors.New("A/B 的真实剖面线或采样间隔不一致，不能导出差值")
 	}
@@ -511,7 +563,14 @@ func planNumericalCompareExport(ctx context.Context, c compareExportCapture, q c
 	if len(p.rows) != len(pairs) && q.kind != compareExportDifference {
 		return p, errors.New("请求的时间窗口不覆盖部分所选道；不会静默删道，请调整为这些道共有的时间范围")
 	}
-	p.size = files[p.headerSide].Info.DataStart + 3200 + int64(len(p.rows))*int64(240+p.samples*8)
+	bytesPerSample, headerSize := 4, header.Info.DataStart
+	if format == segy.ExportFormatIEEE64 {
+		bytesPerSample = 8
+	}
+	if !p.preserveSourceHeaders {
+		headerSize += 3200
+	}
+	p.size = headerSize + int64(len(p.rows))*int64(240+p.samples*bytesPerSample)
 	phase := "基础数据（保留 A/B 自身来源）"
 	stageA, stageB := "基准", "基准"
 	if c.sources[1].description != "" {
@@ -559,9 +618,18 @@ func planNumericalCompareExport(ctx context.Context, c compareExportCapture, q c
 			limits = fmt.Sprintf("\r\n当前线可用空间：%s %d–%d；时间实际交集见上方。", c.axisUnits, firstSource, lastSource)
 		}
 	}
-	p.summary = fmt.Sprintf("对象：%s · %s（%s）\r\n请求：%s\r\n实际：%s · %.9g–%.9g ms\r\n%d 道 × %d 样点/道 · t₀ %.9g ms · dt %.6g ms · IEEE float64 SEG-Y · 约 %.2f MiB",
+	formatLabel := numericalExportFormatLabel(format)
+	if q.format == segy.ExportFormatSource && format == segy.ExportFormatIBM32 {
+		formatLabel += "（有非有限样点时改用 IEEE 32 位）"
+	}
+	p.summary = fmt.Sprintf("对象：%s · %s（%s）\r\n请求：%s\r\n实际：%s · %.9g–%.9g ms\r\n%d 道 × %d 样点/道 · t₀ %.9g ms · dt %.6g ms · %s SEG-Y · 约 %.2f MiB",
 		compareExportNames[q.kind], phase, state, request, actual, float64(p.t0)/1000, float64(p.t1)/1000,
-		len(p.rows), p.samples, float64(p.t0)/1000, float64(p.dt)/1000, float64(p.size)/(1<<20)) + limits
+		len(p.rows), p.samples, float64(p.t0)/1000, float64(p.dt)/1000, formatLabel, float64(p.size)/(1<<20)) + limits
+	if p.preserveSourceHeaders {
+		p.summary += "\r\n卷头沿用输入，不新增扩展文本卷头。"
+	} else {
+		p.summary += "\r\n此结果需记录几何或来源信息，保留输入文本并补充扩展文本卷头。"
+	}
 	return p, nil
 }
 
@@ -622,6 +690,7 @@ func executeNumericalCompareExportWithTarget(ctx context.Context, path string, p
 	return files[p.headerSide].ExportNumericalSection(ctx, path, segy.NumericalSectionExportOptions{
 		Traces: traces, SampleCount: p.samples, Provenance: p.provenance, Progress: progress, CheckCurrent: checkCurrent,
 		GeometryInlineByte: il, GeometryCrosslineByte: xl, TraceOrder: traceOrder, OriginalStem: source.originalStem, ReplaceExisting: replace,
+		SampleFormat: q.format, SourceFormatCode: p.sourceFormatCode, PreserveSourceHeaders: p.preserveSourceHeaders,
 		ReadValues: func(i int) ([]float64, error) {
 			row := p.rows[i]
 			a, err := read(p.headerSide, row.trace[p.headerSide])

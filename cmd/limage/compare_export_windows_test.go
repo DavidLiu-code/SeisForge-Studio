@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -89,7 +90,102 @@ func numericalExportFixtureSource(t *testing.T, path string) compareExportSource
 	}
 	return compareExportSource{path: path, identity: id, geometry: g, originalStem: f.NumericalOriginalStem(),
 		physical: [3]int64{0, f.Info.TraceCount - 1, 1},
-		dt:       f.Info.SampleIntervalUS, samples: f.Info.SamplesPerTrace, sourceOrder: generatedPoststackTraceOrder(path)}
+		dt:       f.Info.SampleIntervalUS, samples: f.Info.SamplesPerTrace, sourceOrder: generatedPoststackTraceOrder(path), generated: compareExportGeneratedSection(path)}
+}
+
+func TestCompareNumericalExportFormatSelector(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	d := numericalExportDialog{h: makeSettingsTestWindow(t, "STATIC", 0), initializing: true,
+		scopeOptions: []int{compareExportVisible, compareExportLine, compareExportAll}}
+	d.createControls(false)
+	for i, want := range []segy.ExportSampleFormat{segy.ExportFormatSource, segy.ExportFormatIBM32, segy.ExportFormatIEEE32, segy.ExportFormatIEEE64} {
+		if i > 0 {
+			pSendMessageW.Call(d.format, CB_SETCURSEL, uintptr(i), 0)
+		}
+		q, err := d.currentRequest()
+		if err != nil || q.format != want || q.kind != compareExportA || q.scope != compareExportVisible || !q.effective {
+			t.Fatalf("sampling format choice %d changed another option: %+v, %v", i, q, err)
+		}
+	}
+}
+
+func TestCompareNumericalExportDefaultFilteredPreservesSourceHeaders(t *testing.T) {
+	const nTr, nS, headerSize, originalTraceBytes = 3, 6, 3600, 240 + 6*4
+	ctx, dir := context.Background(), t.TempDir()
+	source := filepath.Join(dir, "input.sgy")
+	read := func(path string) []byte {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	writeNumericalRegressionFixture(t, source, nTr, nS, 800,
+		func(i int) (int, int) { return []int{184, 184, 186}[i], 50 + i }, // duplicate geometry is a separate physical row
+		func(_, _ int) float64 { return 0 })
+	before := read(source)
+	copy(before, "C 1 SOURCE TEXT MUST STAY EXACT")
+	binary.BigEndian.PutUint16(before[3224:], 1) // IBM 32-bit, all valid zero amplitudes
+	if err := os.WriteFile(source, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := compareExportCapture{key: viewFilterKey{line: 1870}, actualLine: 1870, hasGeometry: true,
+		axis: "Inline", axisUnits: "Crossline", sources: [2]compareExportSource{numericalExportFixtureSource(t, source)},
+		spatial: compareExportBounds{184, 186, 800000, 810000}, frame: &viewFilterSnapshot{}}
+	c.settings[0].Enabled = true
+	c.frame.rows[0] = viewFilterRows{first: 0, last: nS - 1, values: map[int64][]float64{
+		0: {1, 2, 3, 4, 5, 6}, 1: {-1, -2, -3, -4, -5, -6}, 2: {7, 8, 9, 10, 11, 12},
+	}}
+	for _, tc := range []struct {
+		name        string
+		format      segy.ExportSampleFormat
+		wire, width int
+		label       string
+	}{
+		{"default", segy.ExportFormatSource, 1, 4, "IBM 32 位"},
+		{"ibm32", segy.ExportFormatIBM32, 1, 4, "IBM 32 位"},
+		{"ieee32", segy.ExportFormatIEEE32, 5, 4, "IEEE 32 位"},
+		{"ieee64", segy.ExportFormatIEEE64, 6, 8, "IEEE 64 位"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: compareExportA, scope: compareExportVisible, effective: true, format: tc.format})
+			if want := int64(headerSize + nTr*(240+nS*tc.width)); err != nil || !p.preserveSourceHeaders || p.size != want ||
+				!strings.Contains(p.summary, tc.label) || !strings.Contains(p.summary, "不新增扩展文本卷头") {
+				t.Fatalf("wrong plan, size %d expected %d: %s (%v)", p.size, want, p.summary, err)
+			}
+			path := filepath.Join(dir, tc.name+".sgy")
+			if err = executeNumericalCompareExport(ctx, path, p, nil); err != nil {
+				t.Fatal(err)
+			}
+			raw := read(path)
+			if int64(len(raw)) != p.size || !bytes.Equal(raw[:3200], before[:3200]) || tc.wire == 1 && !bytes.Equal(raw[:headerSize], before[:headerSize]) {
+				t.Fatal("export changed the expected size or original reel header")
+			}
+			out, err := segy.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer out.Close()
+			if i := out.Info; i.FormatCode != tc.wire || i.ExtendedTextHeaders != 0 || i.DataStart != headerSize || i.TraceCount != nTr || i.SamplesPerTrace != nS || i.SampleIntervalUS != 2000 {
+				t.Fatalf("wrong output layout: %+v", i)
+			}
+			for i := range nTr {
+				a, b := headerSize+i*originalTraceBytes, headerSize+i*(240+nS*tc.width)
+				if !bytes.Equal(raw[b:b+240], before[a:a+240]) {
+					t.Fatalf("physical trace header %d changed", i)
+				}
+				values, err := out.ReadTraceWindow(int64(i), 0, nS-1)
+				if err != nil || !reflect.DeepEqual(values, c.frame.rows[0].values[int64(i)]) {
+					t.Fatalf("row %d not read from committed filtered samples: %v (%v)", i, values, err)
+				}
+			}
+		})
+	}
+	if !bytes.Equal(before, read(source)) {
+		t.Fatal("source was modified by export")
+	}
 }
 
 func TestCompareNumericalExportRegressionExactFormulaAndRenderIndependence(t *testing.T) {
@@ -146,7 +242,7 @@ func TestCompareNumericalExportRegressionExactFormulaAndRenderIndependence(t *te
 
 	check := func(c compareExportCapture, scope int, bounds compareExportBounds, i0, k0, nTr, nS int, effective bool, leaf string) {
 		t.Helper()
-		q := compareExportSelection{kind: compareExportA, scope: scope, manual: bounds, effective: effective}
+		q := compareExportSelection{kind: compareExportA, scope: scope, manual: bounds, effective: effective, format: segy.ExportFormatIEEE64}
 		p, err := planNumericalCompareExport(ctx, c, q)
 		if err != nil {
 			t.Fatal(err)
@@ -382,7 +478,7 @@ func TestCompareNumericalExportRegressionRealReadOnly(t *testing.T) {
 	c := compareExportCapture{key: viewFilterKey{line: 1870}, actualLine: 1870, hasGeometry: true, axis: "Inline", axisUnits: "Crossline",
 		sources: [2]compareExportSource{{path: path, geometry: g, originalStem: f.NumericalOriginalStem(), identity: id,
 			physical: [3]int64{0, 2272, 1}, dt: f.Info.SampleIntervalUS, samples: f.Info.SamplesPerTrace}}}
-	p, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: compareExportA, scope: compareExportLine})
+	p, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: compareExportA, scope: compareExportLine, format: segy.ExportFormatIEEE64})
 	if err != nil || len(p.rows) != 2273 || p.samples != 351 || p.first != 184 || p.last != 2456 || p.dt != 2000 || p.t0 != 800000 || p.t1 != 1500000 {
 		t.Fatalf("unexpected real input coverage: %s; %v", p.summary, err)
 	}
@@ -481,7 +577,7 @@ func TestCompareNumericalExportFullFormalCoverageAndExactCrop(t *testing.T) {
 
 	check := func(kind, scope int, bounds compareExportBounds, expectTraces, expectSamples, expectT0, firstPhysical int, leaf string) {
 		t.Helper()
-		plan, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: kind, scope: scope, effective: true, manual: bounds})
+		plan, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: kind, scope: scope, effective: true, manual: bounds, format: segy.ExportFormatIEEE64})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -556,7 +652,8 @@ func TestCompareNumericalExportFullFormalCoverageAndExactCrop(t *testing.T) {
 		t.Fatalf("a cropped B was treated as a full processed line: %v", err)
 	}
 	p, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: compareExportB, scope: compareExportAll, effective: true})
-	if err != nil || len(p.rows) != 203 || p.samples != 46 || p.t0 != 1086000 || p.t1 != 1176000 {
+	if err != nil || len(p.rows) != 203 || p.samples != 46 || p.t0 != 1086000 || p.t1 != 1176000 ||
+		p.sourceFormatCode != 5 || p.preserveSourceHeaders || !strings.Contains(p.summary, "IEEE 32 位") {
 		t.Fatalf("the local artifact's true coverage changed: %s %v", p.summary, err)
 	}
 	currentInfo, err := os.Stat(source)
@@ -601,7 +698,7 @@ func TestCompareNumericalExportLocalAndCommittedStage(t *testing.T) {
 		{"effective-difference", compareExportDifference, true, [2][2]float64{{725, 723}, {921, 916}}},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			p, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: mode.kind, scope: compareExportRectangle, effective: mode.effective})
+			p, err := planNumericalCompareExport(ctx, c, compareExportSelection{kind: mode.kind, scope: compareExportRectangle, effective: mode.effective, format: segy.ExportFormatIEEE64})
 			if err != nil || len(p.rows) != 2 || p.samples != 2 || p.t0 != 1088000 || p.t1 != 1090000 {
 				t.Fatalf("stage changed actual crop: %s %v", p.summary, err)
 			}

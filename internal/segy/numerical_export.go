@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -22,23 +21,30 @@ type NumericalExportTrace struct {
 	First int
 }
 
-// NumericalSectionExportOptions describes a fixed-ns, fixed-dt IEEE float64
-// SEG-Y. ReadValues supplies one already-selected *numerical* row and must
-// not use a palette, display gain, or reapply an already-committed filter.
+// NumericalSectionExportOptions describes a fixed-ns, fixed-dt SEG-Y.
+// ReadValues supplies one already-selected numerical row (without palette,
+// display gain or re-filtering). It must be repeatable: a source-IBM32
+// export retries with IEEE32 if a row contains a non-finite sample.
 type NumericalSectionExportOptions struct {
 	Traces                                    []NumericalExportTrace
 	SampleCount                               int
+	SampleFormat                              ExportSampleFormat // zero: use the source format, or IEEE32
+	SourceFormatCode                          int                // override for verified source lineage; negative means no physical format
 	ReadValues                                func(row int) ([]float64, error)
 	CheckCurrent                              func() error
 	Progress                                  func(done, total int)
 	Provenance, OriginalStem                  string
 	GeometryInlineByte, GeometryCrosslineByte int
 	TraceOrder                                bool
+	PreserveSourceHeaders                     bool        // only for standard physical SEG-Y, not derived geometry
 	ReplaceExisting                           os.FileInfo // nil is always atomic no-overwrite
 }
 
-func (s *File) numericalExportHeader(ns int, provenance string, m NumericalExportMetadata) ([]byte, error) {
-	h, err := s.exportHeader(ns, 6)
+func (s *File) numericalExportHeader(ns, traceCount int, format ExportSampleFormat, provenance string, m NumericalExportMetadata, preserve bool) ([]byte, error) {
+	if preserve {
+		return s.preservedNumericalExportHeader(ns, traceCount, format)
+	}
+	h, err := s.exportHeader(ns, int(format))
 	if err != nil {
 		return h, err
 	}
@@ -82,15 +88,46 @@ func verifyNumericalExportTarget(path string, approved, source os.FileInfo) erro
 // ExportNumericalSection verifies exact cropped Delay, fixed-axis headers,
 // byte layout and content by reopening the completed adjacent temporary file.
 // It never replaces the source. An existing output may only be replaced when
-// its previously approved, unchanged identity is supplied. Non-finite values are emitted as
-// IEEE NaN (missing), not removed, zero-filled, or used as valid difference.
-func (s *File) ExportNumericalSection(ctx context.Context, path string, o NumericalSectionExportOptions) (err error) {
+// its previously approved, unchanged identity is supplied. Non-finite values
+// are emitted as IEEE NaN (missing); explicit IBM32 rejects them.
+func (s *File) ExportNumericalSection(ctx context.Context, path string, o NumericalSectionExportOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if s == nil || s.f == nil {
 		return errors.New("SEG-Y source is not available")
 	}
+	sourceCode := o.SourceFormatCode
+	if sourceCode == 0 {
+		if _, physical := s.f.(*os.File); physical {
+			sourceCode = s.Info.FormatCode
+		}
+	}
+	format, err := ResolveExportSampleFormat(o.SampleFormat, sourceCode)
+	if err != nil {
+		return err
+	}
+	if o.SampleFormat != ExportFormatSource || format != ExportFormatIBM32 {
+		return s.exportNumericalSection(ctx, path, o, format)
+	}
+	if report := o.Progress; report != nil {
+		reported := 0
+		o.Progress = func(done, total int) {
+			if done > reported {
+				reported = done
+				report(done, total)
+			}
+		}
+	}
+	err = s.exportNumericalSection(ctx, path, o, format)
+	var multiple interface{ Unwrap() []error }
+	if errors.Is(err, errIBM32NonFinite) && !errors.As(err, &multiple) {
+		return s.exportNumericalSection(ctx, path, o, ExportFormatIEEE32)
+	}
+	return err
+}
+
+func (s *File) exportNumericalSection(ctx context.Context, path string, o NumericalSectionExportOptions, format ExportSampleFormat) (err error) {
 	ns, dt := o.SampleCount, s.Info.SampleIntervalUS
 	if len(o.Traces) == 0 || ns < 1 || ns > 65535 || dt < 1 || dt > 65535 || o.ReadValues == nil {
 		return errors.New("invalid numerical SEG-Y dimensions, sample rate, or source")
@@ -126,10 +163,22 @@ func (s *File) ExportNumericalSection(ctx context.Context, path string, o Numeri
 	if !m.HasGeometry() && (m.InlineByte != 0 || m.CrosslineByte != 0) {
 		return errors.New("invalid numerical SEG-Y Inline/Crossline header mapping")
 	}
-	header, err := s.numericalExportHeader(ns, o.Provenance, m)
+	if o.PreserveSourceHeaders && (o.TraceOrder || !s.CanPreserveNumericalExportHeaders(m.InlineByte, m.CrosslineByte)) {
+		return errors.New("source headers cannot describe this numerical SEG-Y export on their own")
+	}
+	header, err := s.numericalExportHeader(ns, len(o.Traces), format, o.Provenance, m, o.PreserveSourceHeaders)
 	if err != nil {
 		return err
 	}
+	bps := 4
+	if format == ExportFormatIEEE64 {
+		bps = 8
+	}
+	traceBytes := int64(240 + ns*bps)
+	if int64(len(o.Traces)) > (math.MaxInt64-int64(len(header)))/traceBytes {
+		return errors.New("numerical SEG-Y byte size exceeds the supported range")
+	}
+	expectedSize := int64(len(header)) + int64(len(o.Traces))*traceBytes
 	out, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".numerical-*.tmp")
 	if err != nil {
 		return err
@@ -143,7 +192,9 @@ func (s *File) ExportNumericalSection(ctx context.Context, path string, o Numeri
 	closed := false
 	defer func() {
 		if !closed {
-			err = errors.Join(err, out.Close())
+			if e := out.Close(); e != nil {
+				err = errors.Join(err, e)
+			}
 		}
 	}()
 	sha := sha256.New()
@@ -151,11 +202,8 @@ func (s *File) ExportNumericalSection(ctx context.Context, path string, o Numeri
 	if _, err = w.Write(header); err != nil {
 		return err
 	}
-	raw := make([]byte, ns*8)
-	order := binary.ByteOrder(binary.BigEndian)
-	if s.Info.Endian != Big {
-		order = binary.LittleEndian
-	}
+	raw := make([]byte, ns*bps)
+	order := numericalByteOrder(s.Info.Endian)
 	geometryHash := sha256.New()
 	var geoBytes [8]byte
 	for i, row := range o.Traces {
@@ -187,9 +235,25 @@ func (s *File) ExportNumericalSection(ctx context.Context, path string, o Numeri
 			copyNumericalGeometryWords(geoBytes[:], th, m)
 			_, _ = geometryHash.Write(geoBytes[:])
 		}
-		putU16(th[114:116], uint16(ns), s.Info.Endian)
-		putU16(th[116:118], uint16(dt), s.Info.Endian)
-		putI16(th[108:110], int16(t0/1000), s.Info.Endian)
+		if !o.PreserveSourceHeaders {
+			putU16(th[114:116], uint16(ns), s.Info.Endian)
+			putU16(th[116:118], uint16(dt), s.Info.Endian)
+			putI16(th[108:110], int16(t0/1000), s.Info.Endian)
+		} else {
+			if ns != s.Info.SamplesPerTrace {
+				putU16(th[114:116], uint16(ns), s.Info.Endian)
+			}
+			if row.First != 0 {
+				// The public reader uses the base Delay word in milliseconds.
+				// Do not produce a cropped external time axis that disagrees
+				// with its inherited non-unity SEG-Y trace time scalar.
+				if scalar := signed16(th[214:216], s.Info.Endian); scalar != 0 && scalar != 1 && scalar != -1 &&
+					(s.metadataOpenBinary[300] != 0 || s.metadataOpenBinary[301] != 0) {
+					return fmt.Errorf("trace %d uses a non-unity SEG-Y time scalar; exact source-header cropping is unsupported", row.Trace+1)
+				}
+				putI16(th[108:110], int16(t0/1000), s.Info.Endian)
+			}
+		}
 		if m.HasGeometry() {
 			var after [8]byte
 			copyNumericalGeometryWords(after[:], th, m)
@@ -204,11 +268,8 @@ func (s *File) ExportNumericalSection(ctx context.Context, path string, o Numeri
 		if len(values) != ns {
 			return fmt.Errorf("trace %d returned %d samples; expected %d", row.Trace+1, len(values), ns)
 		}
-		for j, v := range values {
-			if math.IsInf(v, 0) || math.IsNaN(v) {
-				v = math.NaN()
-			}
-			order.PutUint64(raw[j*8:j*8+8], math.Float64bits(v))
+		if err = encodeNumericalExportSamples(raw, values, order, format); err != nil {
+			return fmt.Errorf("trace %d: %w", row.Trace+1, err)
 		}
 		if _, err = w.Write(th); err != nil {
 			return err
@@ -236,12 +297,15 @@ func (s *File) ExportNumericalSection(ctx context.Context, path string, o Numeri
 		return fmt.Errorf("reopen numerical SEG-Y: %w", err)
 	}
 	info := reopened.Info
-	expectedSize := int64(len(header)) + int64(len(o.Traces))*int64(240+ns*8)
 	if info.TraceCount != int64(len(o.Traces)) || info.SamplesPerTrace != ns || info.SampleIntervalUS != dt ||
-		info.FormatCode != 6 || info.Endian != s.Info.Endian || info.DataStart != int64(len(header)) || info.FileSize != expectedSize {
+		info.FormatCode != int(format) || info.Endian != s.Info.Endian || info.DataStart != int64(len(header)) || info.FileSize != expectedSize {
 		return errors.Join(errors.New("reopened numerical SEG-Y header or byte size does not match the export plan"), reopened.Close())
 	}
-	if reopened.NumericalExportMetadata() != m {
+	expectedMetadata := m
+	if o.PreserveSourceHeaders {
+		expectedMetadata = s.NumericalExportMetadata()
+	}
+	if reopened.NumericalExportMetadata() != expectedMetadata {
 		return errors.Join(errors.New("reopened numerical SEG-Y geometry metadata does not match the export plan"), reopened.Close())
 	}
 	if err = reopened.Close(); err != nil {
